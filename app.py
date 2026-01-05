@@ -31,46 +31,87 @@ def index():
 
 @app.route('/api/process', methods=['POST'])
 def process_video():
-    """Start video processing"""
+    """Start video processing (single or batch)"""
     try:
         data = request.json
         url = data.get('url', '').strip()
+        urls = data.get('urls', [])  # Batch processing
         formats = data.get('formats', ['tiktok', 'youtube_shorts'])
         
-        if not url:
-            return jsonify({'error': 'URL is required'}), 400
-        
-        # Validate URL
-        if not (url.startswith('http://') or url.startswith('https://')):
-            return jsonify({'error': 'Invalid URL format'}), 400
-        
-        # Create job ID
-        job_id = str(uuid.uuid4())
-        
-        # Initialize job status
-        jobs[job_id] = {
-            'status': 'processing',
-            'progress': 0,
-            'message': 'Starting video download...',
-            'url': url,
-            'formats': formats,
-            'output_files': [],
-            'error': None
-        }
-        
-        # Start processing in background thread
-        thread = threading.Thread(target=process_video_background, args=(job_id, url, formats))
-        thread.daemon = True
-        thread.start()
-        
-        return jsonify({
-            'job_id': job_id,
-            'status': 'processing',
-            'message': 'Processing started'
-        })
+        # Support both single URL and batch URLs
+        if urls and isinstance(urls, list):
+            # Batch processing
+            return process_batch(urls, formats)
+        elif url:
+            # Single video processing
+            if not (url.startswith('http://') or url.startswith('https://')):
+                return jsonify({'error': 'Invalid URL format'}), 400
+            
+            # Create job ID
+            job_id = str(uuid.uuid4())
+            
+            # Initialize job status
+            jobs[job_id] = {
+                'status': 'processing',
+                'progress': 0,
+                'message': 'Starting video download...',
+                'url': url,
+                'formats': formats,
+                'output_files': [],
+                'error': None,
+                'created_at': time.time()
+            }
+            
+            # Start processing in background thread
+            thread = threading.Thread(target=process_video_background, args=(job_id, url, formats))
+            thread.daemon = True
+            thread.start()
+            
+            return jsonify({
+                'job_id': job_id,
+                'status': 'processing',
+                'message': 'Processing started'
+            })
+        else:
+            return jsonify({'error': 'URL or URLs array is required'}), 400
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+def process_batch(urls, formats):
+    """Process multiple videos in batch"""
+    job_ids = []
+    
+    for url in urls:
+        if not (url.startswith('http://') or url.startswith('https://')):
+            continue
+        
+        job_id = str(uuid.uuid4())
+        job_ids.append(job_id)
+        
+        jobs[job_id] = {
+            'status': 'queued',
+            'progress': 0,
+            'message': 'Waiting in queue...',
+            'url': url,
+            'formats': formats,
+            'output_files': [],
+            'error': None,
+            'created_at': time.time(),
+            'batch_id': job_ids[0]  # First job ID as batch identifier
+        }
+        
+        # Start processing
+        thread = threading.Thread(target=process_video_background, args=(job_id, url, formats))
+        thread.daemon = True
+        thread.start()
+    
+    return jsonify({
+        'batch_id': job_ids[0] if job_ids else None,
+        'job_ids': job_ids,
+        'count': len(job_ids),
+        'message': f'Started processing {len(job_ids)} videos'
+    })
 
 def process_video_background(job_id, url, formats):
     """Process video in background thread"""

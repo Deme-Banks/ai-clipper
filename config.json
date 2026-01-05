@@ -33,6 +33,16 @@
   "video_quality": {
     "download_quality": "best",
     "output_quality": "high"
+  },
+  "captions": {
+    "enabled": true,
+    "style": "tiktok",
+    "font_size": 48,
+    "font_color": "white",
+    "background_color": "black",
+    "background_opacity": 0.7,
+    "position": "bottom",
+    "animation": true
   }
 }
 

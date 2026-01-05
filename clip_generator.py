@@ -483,8 +483,8 @@ Requirements:
                 clip = speedx(clip, speed_factor)
                 print(f"âš¡ Sped up by {speed_factor:.2f}x to fit duration")
             
-            # Add engaging elements
-            clip = self._add_engaging_elements(clip, format_type)
+            # Add engaging elements (including captions if enabled)
+            clip = self._add_engaging_elements(clip, format_type, clip_title, add_captions=True)
             
             # Write output
             clip.write_videofile(
@@ -530,23 +530,119 @@ Requirements:
         clip = resize(clip, (target_width, target_height))
         return clip
     
-    def _add_engaging_elements(self, clip: VideoFileClip, format_type: str, title: str = None) -> CompositeVideoClip:
+    def _transcribe_clip_audio(self, clip: VideoFileClip) -> List[Dict]:
+        """Transcribe audio from clip using Whisper"""
+        try:
+            import whisper
+            
+            # Check if captions are enabled
+            if not self.config.get("captions", {}).get("enabled", True):
+                return []
+            
+            print("🎤 Transcribing audio for captions...")
+            
+            # Extract audio to temporary file
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_audio:
+                clip.audio.write_audiofile(tmp_audio.name, logger=None, verbose=False)
+                audio_path = tmp_audio.name
+            
+            try:
+                # Load Whisper model (use base model for speed)
+                model = whisper.load_model("base")
+                
+                # Transcribe
+                result = model.transcribe(audio_path, language="en", task="transcribe")
+                
+                # Extract segments with timestamps
+                segments = []
+                for segment in result.get("segments", []):
+                    segments.append({
+                        "text": segment["text"].strip(),
+                        "start": segment["start"],
+                        "end": segment["end"]
+                    })
+                
+                # Clean up temp file
+                os.unlink(audio_path)
+                
+                return segments
+                
+            except Exception as e:
+                # Clean up temp file on error
+                if os.path.exists(audio_path):
+                    os.unlink(audio_path)
+                raise e
+                
+        except ImportError:
+            print("⚠️  Whisper not installed. Install with: pip install openai-whisper")
+            return []
+        except Exception as e:
+            print(f"⚠️  Transcription failed: {e}")
+            return []
+    
+    def _add_captions_to_clip(self, clip: VideoFileClip, segments: List[Dict]) -> CompositeVideoClip:
+        """Add styled captions to video clip"""
+        if not segments:
+            return clip
+        
+        clips_to_composite = [clip]
+        caption_config = self.config.get("captions", {})
+        
+        try:
+            for segment in segments:
+                text = segment["text"]
+                start_time = segment["start"]
+                end_time = min(segment["end"], clip.duration)
+                duration = end_time - start_time
+                
+                if duration <= 0:
+                    continue
+                
+                # Style captions based on config
+                font_size = caption_config.get("font_size", 48)
+                font_color = caption_config.get("font_color", "white")
+                bg_color = caption_config.get("background_color", "black")
+                bg_opacity = caption_config.get("background_opacity", 0.7)
+                position = caption_config.get("position", "bottom")
+                
+                # Create text clip
+                txt_clip = TextClip(
+                    text,
+                    fontsize=font_size,
+                    color=font_color,
+                    font='Arial-Bold',
+                    method='caption',
+                    size=(clip.w * 0.9, None),
+                    stroke_color='black',
+                    stroke_width=3
+                ).set_duration(duration).set_start(start_time)
+                
+                # Position caption
+                if position == "bottom":
+                    txt_clip = txt_clip.set_position(('center', clip.h * 0.85))
+                elif position == "top":
+                    txt_clip = txt_clip.set_position(('center', 'top'))
+                else:  # center
+                    txt_clip = txt_clip.set_position('center')
+                
+                # Add background if enabled
+                if bg_opacity > 0:
+                    from moviepy.video.fx.all import margin
+                    # Simple background using margin (full implementation would use ImageClip)
+                    pass
+                
+                clips_to_composite.append(txt_clip)
+            
+            return CompositeVideoClip(clips_to_composite)
+            
+        except Exception as e:
+            print(f"⚠️  Could not add captions: {e}")
+            return clip
+    
+    def _add_engaging_elements(self, clip: VideoFileClip, format_type: str, title: str = None, add_captions: bool = True) -> CompositeVideoClip:
         """Add engaging elements like captions, effects, etc."""
         clips_to_composite = [clip]
-        
-        # Add subtle zoom effect for engagement (Ken Burns effect)
-        try:
-            from moviepy.video.fx.all import resize
-            def zoom_effect(get_frame, t):
-                frame = get_frame(t)
-                zoom_factor = 1 + 0.03 * (t / clip.duration)  # Subtle zoom
-                h, w = frame.shape[:2]
-                new_h, new_w = int(h * zoom_factor), int(w * zoom_factor)
-                # Simple resize (in production, use proper zoom with center crop)
-                return frame
-            # Note: Full zoom implementation would require more complex frame manipulation
-        except:
-            pass
         
         # Add title text overlay if provided (for first 2 seconds)
         if title and len(title) > 0:
@@ -565,6 +661,15 @@ Requirements:
                 clips_to_composite.append(title_clip)
             except Exception as e:
                 print(f"⚠️  Could not add title overlay: {e}")
+        
+        # Add captions if enabled
+        if add_captions and self.config.get("captions", {}).get("enabled", True):
+            try:
+                segments = self._transcribe_clip_audio(clip)
+                if segments:
+                    return self._add_captions_to_clip(CompositeVideoClip(clips_to_composite), segments)
+            except Exception as e:
+                print(f"⚠️  Caption generation skipped: {e}")
         
         return CompositeVideoClip(clips_to_composite)
     
