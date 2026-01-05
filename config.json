@@ -24,6 +24,9 @@
     "temperature": 0.7,
     "max_clips_per_video": 5
   },
+  "_ai_model_options": {
+    "_comment": "Available models: gpt-4 (best quality, higher cost), gpt-3.5-turbo (good quality, lower cost)"
+  },
   "video_quality": {
     "download_quality": "best",
     "output_quality": "high"
