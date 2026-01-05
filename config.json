@@ -1,0 +1,32 @@
+{
+  "output_formats": {
+    "tiktok": {
+      "width": 1080,
+      "height": 1920,
+      "duration_max": 60,
+      "fps": 30
+    },
+    "youtube_shorts": {
+      "width": 1080,
+      "height": 1920,
+      "duration_max": 60,
+      "fps": 30
+    }
+  },
+  "clip_settings": {
+    "min_duration": 15,
+    "max_duration": 60,
+    "preferred_duration": 30,
+    "buffer_seconds": 2
+  },
+  "ai_settings": {
+    "model": "gpt-4",
+    "temperature": 0.7,
+    "max_clips_per_video": 5
+  },
+  "video_quality": {
+    "download_quality": "best",
+    "output_quality": "high"
+  }
+}
+
