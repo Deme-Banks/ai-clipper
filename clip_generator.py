@@ -11,11 +11,28 @@ import time
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import yt_dlp
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips
 try:
-    from moviepy.video.fx.all import resize, speedx
+    # MoviePy 2.x imports
+    from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, vfx
+    # MoviePy 2.x uses vfx.Resize and vfx.MultiplySpeed
+    Resize = vfx.Resize
+    MultiplySpeed = vfx.MultiplySpeed
+    MOVIEPY_VERSION = 2
 except ImportError:
-    from moviepy.video.fx import resize, speedx
+    try:
+        # Fallback to MoviePy 1.x imports
+        from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips
+        try:
+            from moviepy.video.fx.all import resize, speedx
+            Resize = resize
+            MultiplySpeed = speedx
+        except ImportError:
+            from moviepy.video.fx import resize, speedx
+            Resize = resize
+            MultiplySpeed = speedx
+        MOVIEPY_VERSION = 1
+    except ImportError:
+        raise ImportError("MoviePy is not installed. Install with: pip install moviepy")
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
@@ -507,9 +524,20 @@ Requirements:
     def _resize_to_vertical(self, clip: VideoFileClip, target_width: int, target_height: int) -> VideoFileClip:
         """Resize clip to vertical format, cropping intelligently"""
         try:
-            from moviepy.video.fx.all import crop
-        except ImportError:
-            from moviepy.video.fx import crop
+            if MOVIEPY_VERSION == 2:
+                Crop = vfx.Crop
+            else:
+                try:
+                    from moviepy.video.fx.all import crop as Crop
+                except ImportError:
+                    from moviepy.video.fx import crop as Crop
+        except:
+            # Fallback - just resize without crop
+            if MOVIEPY_VERSION == 2:
+                clip = clip.fx(Resize, (target_width, target_height))
+            else:
+                clip = Resize(clip, (target_width, target_height))
+            return clip
         
         # Calculate aspect ratios
         clip_aspect = clip.w / clip.h
@@ -519,12 +547,18 @@ Requirements:
             # Clip is wider, crop sides (center crop)
             new_width = int(clip.h * target_aspect)
             x_center = clip.w / 2
-            clip = crop(clip, x_center=x_center, width=new_width)
+            if MOVIEPY_VERSION == 2:
+                clip = clip.fx(Crop, x_center=x_center, width=new_width)
+            else:
+                clip = Crop(clip, x_center=x_center, width=new_width)
         else:
             # Clip is taller, crop top/bottom (center crop)
             new_height = int(clip.w / target_aspect)
             y_center = clip.h / 2
-            clip = crop(clip, y_center=y_center, height=new_height)
+            if MOVIEPY_VERSION == 2:
+                clip = clip.fx(Crop, y_center=y_center, height=new_height)
+            else:
+                clip = Crop(clip, y_center=y_center, height=new_height)
         
         # Resize to target dimensions
         clip = resize(clip, (target_width, target_height))
