@@ -302,6 +302,31 @@ header h1 {
     box-shadow: 0 5px 15px rgba(16, 185, 129, 0.3);
 }
 
+.btn-delete {
+    padding: 10px 20px;
+    background: var(--error-color);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.btn-delete:hover {
+    background: #dc2626;
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(239, 68, 68, 0.3);
+}
+
+.clip-meta {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 5px;
+}
+
 .error-card {
     border: 2px solid var(--error-color);
     background: rgba(239, 68, 68, 0.1);
