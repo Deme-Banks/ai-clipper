@@ -20,12 +20,15 @@
     "buffer_seconds": 2
   },
   "ai_settings": {
-    "model": "gpt-4",
+    "model": "gpt-4o-mini",
     "temperature": 0.7,
     "max_clips_per_video": 5
   },
-  "_ai_model_options": {
-    "_comment": "Available models: gpt-4 (best quality, higher cost), gpt-3.5-turbo (good quality, lower cost)"
+  "_ai_model_recommendations": {
+    "_best_quality": "gpt-4-turbo or gpt-4o (premium, ~$0.01-0.03 per request)",
+    "_best_value": "gpt-4o-mini (excellent quality, ~$0.00015 per request - 60x cheaper!)",
+    "_budget": "gpt-3.5-turbo (good quality, ~$0.0005 per request)",
+    "_note": "gpt-4o-mini is OpenAI's newest model - best balance of quality and cost"
   },
   "video_quality": {
     "download_quality": "best",

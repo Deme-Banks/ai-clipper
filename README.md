@@ -177,9 +177,16 @@ Edit `config.json` to customize settings:
 - **buffer_seconds**: Extra seconds before/after clips (default: 2)
 
 ### AI Settings
-- **model**: OpenAI model to use (default: "gpt-4")
+- **model**: OpenAI model to use (default: "gpt-4o-mini" - best value!)
+  - `gpt-4o-mini`: Best value (60x cheaper than GPT-4, excellent quality) ⭐ Recommended
+  - `gpt-4o`: Premium quality, faster than GPT-4 Turbo
+  - `gpt-4-turbo`: High quality analysis
+  - `gpt-4`: Original premium model
+  - `gpt-3.5-turbo`: Budget option, still very good
 - **temperature**: AI creativity level 0-1 (default: 0.7)
 - **max_clips_per_video**: Maximum clips generated per video (default: 5)
+
+> 💡 **Tip:** See `AI_MODELS_GUIDE.md` for detailed comparison of AI models and recommendations!
 
 ### Example Configuration
 

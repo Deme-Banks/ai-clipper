@@ -346,22 +346,35 @@ Requirements:
         try:
             usage = response.usage
             if usage:
-                # Rough cost estimates (as of 2024, adjust as needed)
-                model = self.config["ai_settings"]["model"]
-                if "gpt-4" in model.lower():
-                    # GPT-4 pricing: ~$0.03 per 1K input tokens, ~$0.06 per 1K output tokens
+                # Cost estimates (as of 2024, adjust as needed)
+                model = self.config["ai_settings"]["model"].lower()
+                
+                # GPT-4o-mini (best value - newest model)
+                if "gpt-4o-mini" in model or "gpt-4-mini" in model:
+                    input_cost = (usage.prompt_tokens / 1000) * 0.00015
+                    output_cost = (usage.completion_tokens / 1000) * 0.0006
+                # GPT-4o (premium quality)
+                elif "gpt-4o" in model and "mini" not in model:
+                    input_cost = (usage.prompt_tokens / 1000) * 0.005
+                    output_cost = (usage.completion_tokens / 1000) * 0.015
+                # GPT-4 Turbo
+                elif "gpt-4-turbo" in model or ("gpt-4" in model and "turbo" in model):
+                    input_cost = (usage.prompt_tokens / 1000) * 0.01
+                    output_cost = (usage.completion_tokens / 1000) * 0.03
+                # GPT-4 (standard)
+                elif "gpt-4" in model:
                     input_cost = (usage.prompt_tokens / 1000) * 0.03
                     output_cost = (usage.completion_tokens / 1000) * 0.06
-                elif "gpt-3.5" in model.lower():
-                    # GPT-3.5-turbo pricing: ~$0.0015 per 1K input tokens, ~$0.002 per 1K output tokens
-                    input_cost = (usage.prompt_tokens / 1000) * 0.0015
-                    output_cost = (usage.completion_tokens / 1000) * 0.002
+                # GPT-3.5-turbo
+                elif "gpt-3.5" in model:
+                    input_cost = (usage.prompt_tokens / 1000) * 0.0005
+                    output_cost = (usage.completion_tokens / 1000) * 0.0015
                 else:
                     input_cost = output_cost = 0
                 
                 total_cost = input_cost + output_cost
                 if total_cost > 0:
-                    print(f"💰 Estimated API cost: ${total_cost:.4f} ({usage.prompt_tokens} input + {usage.completion_tokens} output tokens)")
+                    print(f"💰 Estimated API cost: ${total_cost:.6f} ({usage.prompt_tokens} input + {usage.completion_tokens} output tokens)")
         except Exception:
             pass  # Silently fail cost estimation
     
