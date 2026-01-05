@@ -484,7 +484,7 @@ Requirements:
         return clips
     
     def create_clip(self, video_path: str, start_time: float, end_time: float, 
-                   output_path: str, format_type: str = "tiktok") -> bool:
+                   output_path: str, format_type: str = "tiktok", clip_title: str = None) -> bool:
         """Create a formatted clip for TikTok or YouTube Shorts"""
         print(f"âœ‚ï¸ Creating {format_type} clip: {start_time}s - {end_time}s")
         
