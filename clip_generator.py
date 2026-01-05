@@ -497,7 +497,10 @@ Requirements:
             max_duration = format_config["duration_max"]
             if clip.duration > max_duration:
                 speed_factor = clip.duration / max_duration
-                clip = speedx(clip, speed_factor)
+                if MOVIEPY_VERSION == 2:
+                    clip = clip.fx(MultiplySpeed, speed_factor)
+                else:
+                    clip = MultiplySpeed(clip, speed_factor)
                 print(f"âš¡ Sped up by {speed_factor:.2f}x to fit duration")
             
             # Add engaging elements (including captions if enabled)
