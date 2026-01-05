@@ -4,6 +4,14 @@ Automatically finds engaging moments and creates viral-ready clips
 """
 
 import os
+import sys
+
+# Fix Windows console encoding for emojis
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except:
+        pass
 import json
 import re
 import time
@@ -67,14 +75,14 @@ class ClipGenerator:
                     max_retries=3
                 )
                 self.openai_enabled = True
-                print("✅ OpenAI API initialized successfully")
+                print("[OK] OpenAI API initialized successfully")
             except Exception as e:
-                print(f"⚠️  Warning: OpenAI initialization failed: {e}")
+                print(f"[WARNING] OpenAI initialization failed: {e}")
                 self.openai_enabled = False
         elif not OPENAI_AVAILABLE:
-            print("ℹ️  OpenAI library not installed. Install with: pip install openai")
+            print("[INFO] OpenAI library not installed. Install with: pip install openai")
         elif not self.openai_key:
-            print("ℹ️  OpenAI API key not found. Add OPENAI_API_KEY to .env for AI-powered clip detection")
+            print("[INFO] OpenAI API key not found. Add OPENAI_API_KEY to .env for AI-powered clip detection")
         
         # Create output directories
         self.output_dir = Path("output")
