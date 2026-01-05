@@ -5,11 +5,10 @@ Automatically finds engaging moments and creates viral-ready clips
 
 import os
 import json
-import subprocess
 import re
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 import yt_dlp
 try:
     # MoviePy 2.x imports
@@ -33,7 +32,7 @@ except ImportError:
         MOVIEPY_VERSION = 1
     except ImportError:
         raise ImportError("MoviePy is not installed. Install with: pip install moviepy")
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from dotenv import load_dotenv
 
 # Try to import OpenAI (optional)

@@ -4,7 +4,7 @@ Run with: python app.py
 Access at: http://localhost:5000
 """
 
-from flask import Flask, render_template, request, jsonify, send_file, session
+from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
 import os
 import json
@@ -242,7 +242,7 @@ def get_status(job_id):
 
 @app.route('/api/download/<job_id>/<filename>')
 def download_file(job_id, filename):
-    """Download generated clip"""
+    """Download generated clip (or stream for preview)"""
     if job_id not in jobs:
         return jsonify({'error': 'Job not found'}), 404
     
@@ -255,11 +255,20 @@ def download_file(job_id, filename):
         if file_info['filename'] == filename:
             file_path = Path(file_info['path'])
             if file_path.exists():
-                return send_file(
-                    str(file_path),
-                    as_attachment=True,
-                    download_name=filename
-                )
+                # Check if it's a preview request (Range header for video streaming)
+                if request.headers.get('Range'):
+                    return send_file(
+                        str(file_path),
+                        mimetype='video/mp4',
+                        as_attachment=False,
+                        conditional=True
+                    )
+                else:
+                    return send_file(
+                        str(file_path),
+                        as_attachment=True,
+                        download_name=filename
+                    )
     
     return jsonify({'error': 'File not found'}), 404
 
@@ -335,19 +344,28 @@ def get_library_stats():
 
 @app.route('/api/library/clip/<int:clip_id>/download')
 def download_library_clip(clip_id):
-    """Download a clip from library"""
+    """Download a clip from library (or stream for preview)"""
     clip = library.get_clip_by_id(clip_id)
     if not clip:
         return jsonify({'error': 'Clip not found'}), 404
     
     file_path = Path(clip['clip_path'])
     if file_path.exists():
-        library.increment_downloads(clip_id)
-        return send_file(
-            str(file_path),
-            as_attachment=True,
-            download_name=clip['clip_filename']
-        )
+        # Check if it's a preview request (Range header for video streaming)
+        if request.headers.get('Range'):
+            return send_file(
+                str(file_path),
+                mimetype='video/mp4',
+                as_attachment=False,
+                conditional=True
+            )
+        else:
+            library.increment_downloads(clip_id)
+            return send_file(
+                str(file_path),
+                as_attachment=True,
+                download_name=clip['clip_filename']
+            )
     return jsonify({'error': 'File not found'}), 404
 
 @app.route('/api/library/clip/<int:clip_id>', methods=['DELETE'])

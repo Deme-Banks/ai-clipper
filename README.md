@@ -70,30 +70,14 @@ OPENAI_API_KEY=your_api_key_here
 
 The easiest way to use the AI Clip Generator is through the web interface:
 
-#### Quick Start (Windows)
+#### Quick Start
 
-**Just double-click `START_HERE.bat`** - That's it! 🚀
+**Windows:** Double-click `start.bat` - That's it! 🚀
 
-Or use one of these methods:
-
-1. **Simple launcher (Windows):**
-   - Double-click `START_HERE.bat` or `start_server.bat`
-
-2. **PowerShell (Windows):**
-   ```powershell
-   .\start_server.ps1
-   ```
-
-3. **Command line:**
-   ```bash
-   python app.py
-   ```
-
-4. **Linux/Mac:**
-   ```bash
-   chmod +x start.sh
-   ./start.sh
-   ```
+**Command Line:**
+```bash
+python app.py
+```
 
 #### Access the Web Interface
 

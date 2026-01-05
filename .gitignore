@@ -15,6 +15,10 @@ dist/
 output/
 downloads/
 
+# Database
+*.db
+clip_library.db
+
 # Environment variables
 .env
 

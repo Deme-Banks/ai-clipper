@@ -135,11 +135,14 @@ function showResults(outputFiles) {
                 ${file.reason ? `<div class="clip-reason">${file.reason}</div>` : ''}
                 ${engagementScore > 0 ? `<div class="clip-score">Viral Score: ${scoreStars} (${engagementScore}/10)</div>` : ''}
             </div>
-            <div class="clip-actions">
-                <a href="/api/download/${currentJobId}/${file.filename}" class="btn-download" download>
-                    ⬇️ Download
-                </a>
-            </div>
+                <div class="clip-actions">
+                    <button onclick="previewClip('${currentJobId}', '${file.filename}', '${file.title || `Clip ${index + 1}`}')" class="btn-preview">
+                        ▶️ Preview
+                    </button>
+                    <a href="/api/download/${currentJobId}/${file.filename}" class="btn-download" download>
+                        ⬇️ Download
+                    </a>
+                </div>
         `;
         
         clipsList.appendChild(clipItem);
@@ -293,6 +296,9 @@ function displayLibraryClips(clips) {
                     <div class="clip-meta">Views: ${clip.views || 0} • Downloads: ${clip.downloads || 0}</div>
                 </div>
                 <div class="clip-actions">
+                    <button onclick="previewLibraryClip(${clip.id}, '${clip.clip_title || 'Untitled'}')" class="btn-preview">
+                        ▶️ Preview
+                    </button>
                     <a href="/api/library/clip/${clip.id}/download" class="btn-download" download>
                         ⬇️ Download
                     </a>
@@ -319,6 +325,62 @@ async function deleteClip(clipId) {
     } catch (error) {
         console.error('Error deleting clip:', error);
         alert('Error deleting clip');
+    }
+}
+
+// Preview Functions
+function previewClip(jobId, filename, title) {
+    const modal = document.getElementById('previewModal');
+    const video = document.getElementById('previewVideo');
+    const titleEl = document.getElementById('previewTitle');
+    const downloadLink = document.getElementById('previewDownload');
+    
+    titleEl.textContent = title;
+    video.src = `/api/download/${jobId}/${filename}`;
+    downloadLink.href = `/api/download/${jobId}/${filename}`;
+    downloadLink.download = filename;
+    
+    modal.style.display = 'block';
+    video.load();
+}
+
+async function previewLibraryClip(clipId, title) {
+    const modal = document.getElementById('previewModal');
+    const video = document.getElementById('previewVideo');
+    const titleEl = document.getElementById('previewTitle');
+    const downloadLink = document.getElementById('previewDownload');
+    
+    try {
+        const response = await fetch(`/api/library/clip/${clipId}`);
+        const clip = await response.json();
+        
+        titleEl.textContent = title;
+        video.src = `/api/library/clip/${clipId}/download`;
+        downloadLink.href = `/api/library/clip/${clipId}/download`;
+        downloadLink.download = clip.clip_filename;
+        
+        modal.style.display = 'block';
+        video.load();
+    } catch (error) {
+        console.error('Error loading clip:', error);
+        alert('Error loading clip preview');
+    }
+}
+
+function closePreview() {
+    const modal = document.getElementById('previewModal');
+    const video = document.getElementById('previewVideo');
+    
+    modal.style.display = 'none';
+    video.pause();
+    video.src = '';
+}
+
+// Close modal when clicking outside
+window.onclick = function(event) {
+    const modal = document.getElementById('previewModal');
+    if (event.target == modal) {
+        closePreview();
     }
 }
 
