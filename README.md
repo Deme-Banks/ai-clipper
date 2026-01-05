@@ -21,34 +21,34 @@ Automatically transform Twitch and YouTube videos into engaging TikTok Reels and
 ### Install FFmpeg
 
 **Windows:**
-`powershell
+```powershell
 winget install --id=Gyan.FFmpeg
-`
+```
 
 **Mac:**
-`ash
+```bash
 brew install ffmpeg
-`
+```
 
 **Linux:**
-`ash
+```bash
 sudo apt-get install ffmpeg
-`
+```
 
 ### Install Python Dependencies
 
-`ash
+```bash
 cd ai-clip-generator
 pip install -r requirements.txt
-`
+```
 
 ### Optional: OpenAI API Key (for better AI clip detection)
 
 1. Get an API key from https://platform.openai.com/
 2. Create a .env file in the project root:
-`
+```
 OPENAI_API_KEY=your_api_key_here
-`
+```
 
 *Note: The tool works without OpenAI, but AI detection provides better clip selection.*
 
@@ -56,7 +56,7 @@ OPENAI_API_KEY=your_api_key_here
 
 ### Basic Usage
 
-`ash
+```bash
 # Create clips for both TikTok and YouTube Shorts
 python clip_generator.py https://www.youtube.com/watch?v=VIDEO_ID
 
@@ -65,13 +65,13 @@ python clip_generator.py https://www.youtube.com/watch?v=VIDEO_ID tiktok
 
 # Create only YouTube Shorts format
 python clip_generator.py https://www.youtube.com/watch?v=VIDEO_ID youtube_shorts
-`
+```
 
 ## ðŸ“ Output
 
 All clips are saved in the output/ directory with names like:
-- ideo_title_clip1_tiktok.mp4
-- ideo_title_clip1_youtube_shorts.mp4
+- video_title_clip1_tiktok.mp4
+- video_title_clip1_youtube_shorts.mp4
 
 ## âš™ï¸ Configuration
 
