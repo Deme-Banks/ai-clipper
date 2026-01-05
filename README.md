@@ -70,25 +70,47 @@ OPENAI_API_KEY=your_api_key_here
 
 The easiest way to use the AI Clip Generator is through the web interface:
 
-1. **Start the web server:**
+#### Quick Start (Windows)
+
+**Just double-click `START_HERE.bat`** - That's it! 🚀
+
+Or use one of these methods:
+
+1. **Simple launcher (Windows):**
+   - Double-click `START_HERE.bat` or `start_server.bat`
+
+2. **PowerShell (Windows):**
+   ```powershell
+   .\start_server.ps1
+   ```
+
+3. **Command line:**
    ```bash
    python app.py
    ```
-   
-   Or on Windows:
+
+4. **Linux/Mac:**
    ```bash
-   run_web.bat
+   chmod +x start.sh
+   ./start.sh
    ```
 
-2. **Open your browser:**
-   - Local access: http://localhost:5000
-   - Network access: http://YOUR_IP:5000 (accessible from other devices on your network)
+#### Access the Web Interface
 
-3. **Use the interface:**
-   - Paste a YouTube or Twitch URL
-   - Select output formats (TikTok, YouTube Shorts, or both)
-   - Click "Generate Clips"
-   - Watch the progress and download your clips when ready!
+Once the server starts, open your browser:
+
+- **Local access:** http://localhost:5000
+- **Network access:** http://YOUR_IP:5000 (accessible from other devices on your network)
+
+The startup script will automatically show your network IP address.
+
+#### Using the Interface
+
+1. Paste a YouTube or Twitch URL
+2. Select output formats (TikTok, YouTube Shorts, or both)
+3. Click "Generate Clips"
+4. Watch real-time progress updates
+5. Download your clips when ready!
 
 ### 💻 Command Line Usage
 
