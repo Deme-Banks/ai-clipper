@@ -1,0 +1,80 @@
+{
+    "templates": {
+        "gaming": {
+            "name": "🎮 Gaming Highlights",
+            "description": "Perfect for gaming clips with high energy",
+            "filters": {
+                "brightness": 1.1,
+                "contrast": 1.2,
+                "saturation": 1.1
+            },
+            "speed": 1.0,
+            "text_overlay": {
+                "position": "top",
+                "fontsize": 60,
+                "color": "#ffffff"
+            }
+        },
+        "vlog": {
+            "name": "📹 Vlog Style",
+            "description": "Clean and professional vlog aesthetic",
+            "filters": {
+                "brightness": 1.05,
+                "contrast": 1.1,
+                "saturation": 0.95
+            },
+            "speed": 1.0,
+            "text_overlay": {
+                "position": "bottom",
+                "fontsize": 48,
+                "color": "#ffffff"
+            }
+        },
+        "reaction": {
+            "name": "😱 Reaction Clips",
+            "description": "Vibrant colors for reaction content",
+            "filters": {
+                "brightness": 1.15,
+                "contrast": 1.3,
+                "saturation": 1.2
+            },
+            "speed": 1.0,
+            "text_overlay": {
+                "position": "center",
+                "fontsize": 72,
+                "color": "#ffff00"
+            }
+        },
+        "cinematic": {
+            "name": "🎬 Cinematic",
+            "description": "Moody, film-like aesthetic",
+            "filters": {
+                "brightness": 0.9,
+                "contrast": 1.4,
+                "saturation": 0.8
+            },
+            "speed": 1.0,
+            "text_overlay": {
+                "position": "bottom",
+                "fontsize": 40,
+                "color": "#ffffff"
+            }
+        },
+        "vibrant": {
+            "name": "🌈 Vibrant",
+            "description": "Super colorful and eye-catching",
+            "filters": {
+                "brightness": 1.2,
+                "contrast": 1.1,
+                "saturation": 1.5
+            },
+            "speed": 1.0,
+            "text_overlay": {
+                "position": "top",
+                "fontsize": 56,
+                "color": "#ffffff"
+            }
+        }
+    }
+}
+

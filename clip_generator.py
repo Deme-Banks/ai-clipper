@@ -16,15 +16,22 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import yt_dlp
 try:
-    # MoviePy 2.x imports
+    # Try MoviePy 2.x imports first
     from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, vfx
     # MoviePy 2.x uses vfx.Resize and vfx.MultiplySpeed
     Resize = vfx.Resize
     MultiplySpeed = vfx.MultiplySpeed
-    MOVIEPY_VERSION = 2
+    # Check actual version to be sure
+    try:
+        import moviepy
+        version_str = getattr(moviepy, '__version__', '2.0.0')
+        major_version = int(version_str.split('.')[0])
+        MOVIEPY_VERSION = major_version if major_version >= 2 else 1
+    except:
+        MOVIEPY_VERSION = 2  # Assume 2.x if import succeeded
 except ImportError:
     try:
         # Fallback to MoviePy 1.x imports
@@ -490,7 +497,25 @@ Requirements:
         
         try:
             # Load video
-            clip = VideoFileClip(video_path).subclip(start_time, end_time)
+            full_clip = VideoFileClip(video_path)
+            # Try to extract subclip - handle both MoviePy 1.x and 2.x
+            # Try slicing first (MoviePy 2.x), then fallback to subclip (MoviePy 1.x)
+            clip = None
+            try:
+                # MoviePy 2.x uses slicing syntax
+                clip = full_clip[start_time:end_time]
+            except (TypeError, AttributeError, NotImplementedError, IndexError):
+                # Fallback to subclip method (MoviePy 1.x)
+                try:
+                    if hasattr(full_clip, 'subclip'):
+                        clip = full_clip.subclip(start_time, end_time)
+                    else:
+                        raise AttributeError("Neither slicing nor subclip available")
+                except Exception as e:
+                    raise AttributeError(f"Could not extract subclip: {e}")
+            
+            if clip is None:
+                raise ValueError("Failed to extract subclip from video")
             
             # Get format settings
             format_config = self.config["output_formats"][format_type]
@@ -523,7 +548,9 @@ Requirements:
                 bitrate='8000k'
             )
             
-            clip.close()
+            # Generate thumbnail (before closing clip)
+            self._generate_thumbnail(clip, output_path)
+            
             print(f"âœ… Created: {output_path}")
             return True
             
@@ -533,6 +560,8 @@ Requirements:
     
     def _resize_to_vertical(self, clip: VideoFileClip, target_width: int, target_height: int) -> VideoFileClip:
         """Resize clip to vertical format, cropping intelligently"""
+        # Try to import Crop function
+        Crop = None
         try:
             if MOVIEPY_VERSION == 2:
                 Crop = vfx.Crop
@@ -542,7 +571,7 @@ Requirements:
                 except ImportError:
                     from moviepy.video.fx import crop as Crop
         except:
-            # Fallback - just resize without crop
+            # If crop is not available, just resize without crop
             if MOVIEPY_VERSION == 2:
                 clip = clip.fx(Resize, (target_width, target_height))
             else:
@@ -553,25 +582,29 @@ Requirements:
         clip_aspect = clip.w / clip.h
         target_aspect = target_width / target_height
         
-        if clip_aspect > target_aspect:
-            # Clip is wider, crop sides (center crop)
-            new_width = int(clip.h * target_aspect)
-            x_center = clip.w / 2
-            if MOVIEPY_VERSION == 2:
-                clip = clip.fx(Crop, x_center=x_center, width=new_width)
+        if Crop is not None:
+            if clip_aspect > target_aspect:
+                # Clip is wider, crop sides (center crop)
+                new_width = int(clip.h * target_aspect)
+                x_center = clip.w / 2
+                if MOVIEPY_VERSION == 2:
+                    clip = clip.fx(Crop, x_center=x_center, width=new_width)
+                else:
+                    clip = Crop(clip, x_center=x_center, width=new_width)
             else:
-                clip = Crop(clip, x_center=x_center, width=new_width)
-        else:
-            # Clip is taller, crop top/bottom (center crop)
-            new_height = int(clip.w / target_aspect)
-            y_center = clip.h / 2
-            if MOVIEPY_VERSION == 2:
-                clip = clip.fx(Crop, y_center=y_center, height=new_height)
-            else:
-                clip = Crop(clip, y_center=y_center, height=new_height)
+                # Clip is taller, crop top/bottom (center crop)
+                new_height = int(clip.w / target_aspect)
+                y_center = clip.h / 2
+                if MOVIEPY_VERSION == 2:
+                    clip = clip.fx(Crop, y_center=y_center, height=new_height)
+                else:
+                    clip = Crop(clip, y_center=y_center, height=new_height)
         
         # Resize to target dimensions
-        clip = resize(clip, (target_width, target_height))
+        if MOVIEPY_VERSION == 2:
+            clip = clip.fx(Resize, (target_width, target_height))
+        else:
+            clip = Resize(clip, (target_width, target_height))
         return clip
     
     def _transcribe_clip_audio(self, clip: VideoFileClip) -> List[Dict]:
@@ -753,6 +786,295 @@ Requirements:
         
         print(f"\nðŸŽ‰ Successfully created {len(output_files)} clips!")
         return output_files
+    
+    def edit_clip(self, video_path: str, output_path: str, 
+                  trim_start: Optional[float] = None,
+                  trim_end: Optional[float] = None,
+                  speed: Optional[float] = None,
+                  text_overlay: Optional[Dict] = None,
+                  format_type: str = "tiktok",
+                  filters: Optional[Dict] = None) -> bool:
+        """
+        Edit an existing clip with various options
+        
+        Args:
+            video_path: Path to input video file
+            output_path: Path to save edited video
+            trim_start: Start time for trimming (seconds)
+            trim_end: End time for trimming (seconds)
+            speed: Speed multiplier (1.0 = normal, 2.0 = 2x speed, 0.5 = half speed)
+            text_overlay: Dict with text overlay settings:
+                - text: Text to display
+                - position: 'top', 'bottom', 'center'
+                - fontsize: Font size
+                - color: Text color
+                - start_time: When to show (seconds)
+                - duration: How long to show (seconds)
+            format_type: Output format (tiktok/youtube_shorts)
+        """
+        print(f"✂️ Editing clip: {video_path}")
+        
+        full_clip = None
+        clip = None
+        try:
+            # Load video
+            full_clip = VideoFileClip(video_path)
+            
+            # Extract subclip if trimming is requested
+            start_time = trim_start if trim_start is not None else 0
+            end_time = trim_end if trim_end is not None else full_clip.duration
+            
+            # Try to extract subclip
+            try:
+                if MOVIEPY_VERSION == 2:
+                    clip = full_clip[start_time:end_time]
+                else:
+                    if hasattr(full_clip, 'subclip'):
+                        clip = full_clip.subclip(start_time, end_time)
+                    else:
+                        clip = full_clip[start_time:end_time]
+            except (TypeError, AttributeError, NotImplementedError, IndexError):
+                if hasattr(full_clip, 'subclip'):
+                    clip = full_clip.subclip(start_time, end_time)
+                else:
+                    raise AttributeError("Could not extract subclip")
+            
+            if clip is None:
+                raise ValueError("Failed to extract subclip from video")
+            
+            # Apply speed change if requested
+            if speed is not None and speed != 1.0:
+                if MOVIEPY_VERSION == 2:
+                    clip = clip.fx(MultiplySpeed, speed)
+                else:
+                    clip = MultiplySpeed(clip, speed)
+                print(f"⚡ Speed adjusted to {speed}x")
+            
+            # Get format settings
+            format_config = self.config["output_formats"].get(format_type, self.config["output_formats"]["tiktok"])
+            target_width = format_config["width"]
+            target_height = format_config["height"]
+            
+            # Resize to target format
+            clip = self._resize_to_vertical(clip, target_width, target_height)
+            
+            # Apply video filters if requested
+            if filters:
+                clip = self._apply_filters(clip, filters)
+            
+            # Add text overlay if requested
+            if text_overlay:
+                clip = self._add_text_overlay(clip, text_overlay)
+            
+            # Write output
+            clip.write_videofile(
+                output_path,
+                codec='libx264',
+                audio_codec='aac',
+                fps=format_config["fps"],
+                preset='medium',
+                bitrate='8000k'
+            )
+            
+            print(f"✅ Edited clip saved: {output_path}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error editing clip: {e}")
+            return False
+        finally:
+            # Clean up clips
+            if 'clip' in locals() and clip is not None:
+                try:
+                    clip.close()
+                except:
+                    pass
+            if 'full_clip' in locals() and full_clip is not None:
+                try:
+                    full_clip.close()
+                except:
+                    pass
+    
+    def _generate_thumbnail(self, clip: VideoFileClip, output_path: str) -> Optional[str]:
+        """Generate a thumbnail for the clip"""
+        try:
+            # Get thumbnail path (same name as video but .jpg)
+            thumbnail_path = Path(output_path).with_suffix('.jpg')
+            
+            # Extract frame at midpoint of clip
+            frame_time = clip.duration / 2
+            frame = clip.get_frame(frame_time)
+            
+            # Convert numpy array to PIL Image
+            img = Image.fromarray(frame)
+            
+            # Resize thumbnail (keep aspect ratio, max 400px width)
+            max_width = 400
+            if img.width > max_width:
+                ratio = max_width / img.width
+                new_height = int(img.height * ratio)
+                img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Save thumbnail
+            img.save(thumbnail_path, 'JPEG', quality=85)
+            
+            return str(thumbnail_path)
+        except Exception as e:
+            print(f"⚠️  Could not generate thumbnail: {e}")
+            return None
+    
+    def _apply_filters(self, clip: VideoFileClip, filters: Dict) -> VideoFileClip:
+        """Apply video filters (brightness, contrast, saturation)"""
+        try:
+            # Import colorx for filters
+            try:
+                if MOVIEPY_VERSION == 2:
+                    from moviepy.video.fx import colorx
+                    Brightness = colorx.colorx
+                    Contrast = colorx.colorx
+                    Saturation = colorx.colorx
+                else:
+                    from moviepy.video.fx.all import colorx
+                    Brightness = colorx
+                    Contrast = colorx
+                    Saturation = colorx
+            except ImportError:
+                # Fallback: use manual color adjustment
+                print("⚠️  Color filters not available, using basic adjustments")
+                return clip
+            
+            # Apply brightness
+            if 'brightness' in filters and filters['brightness'] != 1.0:
+                brightness = filters['brightness']
+                try:
+                    if MOVIEPY_VERSION == 2:
+                        clip = clip.fx(lambda c: c.fx(lambda gf: gf * brightness))
+                    else:
+                        # Manual brightness adjustment
+                        clip = clip.fx(lambda gf: gf * brightness)
+                except:
+                    print(f"⚠️  Could not apply brightness filter")
+            
+            # Apply contrast
+            if 'contrast' in filters and filters['contrast'] != 1.0:
+                contrast = filters['contrast']
+                try:
+                    # Contrast adjustment: (pixel - 128) * contrast + 128
+                    if MOVIEPY_VERSION == 2:
+                        clip = clip.fx(lambda c: c.fx(lambda gf: (gf - 128) * contrast + 128))
+                    else:
+                        clip = clip.fx(lambda gf: (gf - 128) * contrast + 128)
+                except:
+                    print(f"⚠️  Could not apply contrast filter")
+            
+            # Apply saturation (simplified - would need proper color space conversion)
+            if 'saturation' in filters and filters['saturation'] != 1.0:
+                saturation = filters['saturation']
+                print(f"📊 Saturation adjustment: {saturation}x (simplified)")
+                # Note: Full saturation requires HSV conversion which is complex
+            
+            return clip
+            
+        except Exception as e:
+            print(f"⚠️  Error applying filters: {e}")
+            return clip
+    
+    def _add_text_overlay(self, clip: VideoFileClip, overlay_config: Dict) -> CompositeVideoClip:
+        """Add text overlay to clip"""
+        try:
+            text = overlay_config.get('text', '')
+            position = overlay_config.get('position', 'bottom')
+            fontsize = overlay_config.get('fontsize', 48)
+            color = overlay_config.get('color', 'white')
+            start_time = overlay_config.get('start_time', 0)
+            duration = overlay_config.get('duration', clip.duration)
+            
+            if not text:
+                return clip
+            
+            # Create text clip
+            txt_clip = TextClip(
+                text,
+                fontsize=fontsize,
+                color=color,
+                font='Arial-Bold',
+                method='caption',
+                size=(clip.w * 0.9, None),
+                stroke_color='black',
+                stroke_width=3
+            ).set_duration(min(duration, clip.duration)).set_start(start_time)
+            
+            # Position text
+            if position == "bottom":
+                txt_clip = txt_clip.set_position(('center', clip.h * 0.85))
+            elif position == "top":
+                txt_clip = txt_clip.set_position(('center', 'top'))
+            else:  # center
+                txt_clip = txt_clip.set_position('center')
+            
+            return CompositeVideoClip([clip, txt_clip])
+            
+        except Exception as e:
+            print(f"⚠️  Could not add text overlay: {e}")
+            return clip
+    
+    def process_uploaded_video(self, video_path: str, output_path: str, 
+                               format_type: str = "tiktok") -> bool:
+        """
+        Process an uploaded video file (convert to target format)
+        
+        Args:
+            video_path: Path to uploaded video file
+            output_path: Path to save processed video
+            format_type: Target format (tiktok/youtube_shorts)
+        """
+        print(f"📤 Processing uploaded video: {video_path}")
+        
+        clip = None
+        try:
+            # Load video
+            clip = VideoFileClip(video_path)
+            
+            # Get format settings
+            format_config = self.config["output_formats"].get(format_type, self.config["output_formats"]["tiktok"])
+            target_width = format_config["width"]
+            target_height = format_config["height"]
+            
+            # Resize to target format
+            clip = self._resize_to_vertical(clip, target_width, target_height)
+            
+            # Check duration and speed up if needed
+            max_duration = format_config["duration_max"]
+            if clip.duration > max_duration:
+                speed_factor = clip.duration / max_duration
+                if MOVIEPY_VERSION == 2:
+                    clip = clip.fx(MultiplySpeed, speed_factor)
+                else:
+                    clip = MultiplySpeed(clip, speed_factor)
+                print(f"⚡ Sped up by {speed_factor:.2f}x to fit duration")
+            
+            # Write output
+            clip.write_videofile(
+                output_path,
+                codec='libx264',
+                audio_codec='aac',
+                fps=format_config["fps"],
+                preset='medium',
+                bitrate='8000k'
+            )
+            
+            print(f"✅ Processed video saved: {output_path}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error processing video: {e}")
+            return False
+        finally:
+            if clip is not None:
+                try:
+                    clip.close()
+                except:
+                    pass
 
 
 def main():

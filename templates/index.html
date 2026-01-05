@@ -3,107 +3,308 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎬 AI Clip Generator - Viral Content Creator</title>
+    <title>AI Clip Generator</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>🎬 AI Clip Generator</h1>
-            <p class="subtitle">Transform videos into viral TikTok & YouTube Shorts</p>
-        </header>
-
-        <main>
-            <!-- Navigation Tabs -->
-            <div class="tabs">
-                <button class="tab-btn active" onclick="showTab('create')">🎬 Create Clips</button>
-                <button class="tab-btn" onclick="showTab('library')">📚 Library</button>
+    <div class="app-container">
+        <!-- Top Bar -->
+        <div class="top-bar">
+            <div class="window-controls">
+                <div class="window-btn close"></div>
+                <div class="window-btn minimize"></div>
+                <div class="window-btn maximize"></div>
             </div>
+            <div class="top-bar-title">AI Clip Generator</div>
+        </div>
 
-            <!-- Create Tab -->
-            <div id="createTab" class="tab-content active">
-            <div class="card">
-                <h2>Create Viral Clips</h2>
-                <form id="videoForm">
-                    <div class="form-group">
-                        <label for="videoUrl">Video URL</label>
-                        <input 
-                            type="url" 
-                            id="videoUrl" 
-                            name="url" 
-                            placeholder="https://www.youtube.com/watch?v=..." 
-                            required
-                        >
-                        <small>Supports YouTube and Twitch URLs</small>
+        <div class="app-layout">
+            <!-- Left Sidebar -->
+            <aside class="sidebar">
+                <nav class="sidebar-nav">
+                    <a href="#" class="nav-item active" onclick="showTab('create'); return false;">
+                        <span class="nav-icon">✨</span>
+                        <span class="nav-text">Create Clips</span>
+                    </a>
+                    <a href="#" class="nav-item" onclick="showTab('library'); return false;">
+                        <span class="nav-icon">📦</span>
+                        <span class="nav-text">Library</span>
+                    </a>
+                    <a href="#" class="nav-item" onclick="showTab('edit'); return false;">
+                        <span class="nav-icon">🎨</span>
+                        <span class="nav-text">Edit</span>
+                    </a>
+                </nav>
+
+                <div class="sidebar-section">
+                    <button class="new-playlist-btn" id="newClipBtn">NEW CLIP</button>
+                </div>
+
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Recent</div>
+                    <div id="recentClips" class="recent-clips"></div>
+                </div>
+            </aside>
+
+            <!-- Main Content -->
+            <main class="main-content">
+                <!-- Create Tab -->
+                <div id="createTab" class="tab-content active">
+                    <div class="content-header">
+                        <h1>Create Viral Clips</h1>
+                        <p class="subtitle">Transform videos into TikTok & YouTube Shorts</p>
                     </div>
 
-                    <div class="form-group">
-                        <label>Output Formats</label>
-                        <div class="checkbox-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" name="formats" value="tiktok" checked>
-                                <span>📱 TikTok (1080x1920)</span>
-                            </label>
-                            <label class="checkbox-label">
-                                <input type="checkbox" name="formats" value="youtube_shorts" checked>
-                                <span>🎯 YouTube Shorts (1080x1920)</span>
-                            </label>
+                    <div class="content-card">
+                        <form id="videoForm">
+                            <div class="form-group">
+                                <label for="videoUrl">Video URL</label>
+                                <input 
+                                    type="url" 
+                                    id="videoUrl" 
+                                    name="url" 
+                                    placeholder="https://www.youtube.com/watch?v=..." 
+                                    required
+                                >
+                                <small>Supports YouTube and Twitch URLs</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Output Formats</label>
+                                <div class="checkbox-group">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="formats" value="tiktok" checked>
+                                        <span>🎵 TikTok (1080x1920)</span>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="formats" value="youtube_shorts" checked>
+                                        <span>📺 YouTube Shorts (1080x1920)</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <button type="submit" id="submitBtn" class="btn btn-primary">
+                                <span id="btnText">⚡ Generate Clips</span>
+                                <span id="btnLoader" class="loader" style="display: none;"></span>
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Progress Section -->
+                    <div id="progressSection" class="content-card" style="display: none;">
+                        <h3>Processing Status</h3>
+                        <div class="progress-container">
+                            <div class="progress-bar">
+                                <div id="progressFill" class="progress-fill"></div>
+                            </div>
+                            <p id="progressText" class="progress-text">Starting...</p>
+                            <div id="detailedProgress" class="detailed-progress" style="display: none;">
+                                <p id="currentClipInfo" class="current-clip-info"></p>
+                                <p id="estimatedTime" class="estimated-time"></p>
+                            </div>
                         </div>
                     </div>
 
-                    <button type="submit" id="submitBtn" class="btn btn-primary">
-                        <span id="btnText">🚀 Generate Clips</span>
-                        <span id="btnLoader" class="loader" style="display: none;"></span>
-                    </button>
-                </form>
-            </div>
-
-            <!-- Progress Section -->
-            <div id="progressSection" class="card" style="display: none;">
-                <h3>Processing Status</h3>
-                <div class="progress-container">
-                    <div class="progress-bar">
-                        <div id="progressFill" class="progress-fill"></div>
+                    <!-- Results Section -->
+                    <div id="resultsSection" class="content-card" style="display: none;">
+                        <div class="results-header">
+                            <h3>🎉 Generated Clips</h3>
+                            <div class="bulk-actions" id="bulkActions" style="display: none;">
+                                <button onclick="selectAllClips()" class="btn btn-secondary" style="width: auto; padding: 8px 16px;" data-tooltip="Select all clips">Select All</button>
+                                <button onclick="deselectAllClips()" class="btn btn-secondary" style="width: auto; padding: 8px 16px;" data-tooltip="Deselect all clips">Deselect All</button>
+                                <button onclick="bulkDownload()" class="btn btn-primary" style="width: auto; padding: 8px 16px;" data-tooltip="Download all selected clips">💾 Download Selected</button>
+                                <button onclick="bulkDelete()" class="btn btn-secondary" style="width: auto; padding: 8px 16px; background: var(--error-color);" data-tooltip="Delete selected clips permanently">🗑️ Delete Selected</button>
+                                <span id="selectedCount" class="selected-count">0 selected</span>
+                            </div>
+                        </div>
+                        <div id="clipsList" class="clips-grid"></div>
                     </div>
-                    <p id="progressText" class="progress-text">Starting...</p>
-                </div>
-            </div>
 
-            <!-- Results Section -->
-            <div id="resultsSection" class="card" style="display: none;">
-                <h3>✨ Generated Clips</h3>
-                <div id="clipsList" class="clips-list"></div>
-            </div>
-
-            <!-- Error Section -->
-            <div id="errorSection" class="card error-card" style="display: none;">
-                <h3>❌ Error</h3>
-                <p id="errorMessage"></p>
-            </div>
-            </div>
-
-            <!-- Library Tab -->
-            <div id="libraryTab" class="tab-content" style="display: none;">
-                <div class="card">
-                    <h2>📚 Clip Library</h2>
-                    <div class="library-controls">
-                        <input type="text" id="librarySearch" placeholder="🔍 Search clips..." class="search-input">
-                        <select id="formatFilter" class="filter-select">
-                            <option value="">All Formats</option>
-                            <option value="tiktok">TikTok</option>
-                            <option value="youtube_shorts">YouTube Shorts</option>
-                        </select>
-                        <button onclick="loadLibrary()" class="btn btn-secondary">🔄 Refresh</button>
+                    <!-- Error Section -->
+                    <div id="errorSection" class="content-card error-card" style="display: none;">
+                        <h3>⚠️ Error</h3>
+                        <p id="errorMessage"></p>
                     </div>
-                    <div id="libraryStats" class="library-stats"></div>
-                    <div id="libraryClips" class="library-clips"></div>
                 </div>
-            </div>
-        </main>
 
-        <footer>
-            <p>Powered by OpenAI • Made for content creators 🚀</p>
-        </footer>
+                <!-- Library Tab -->
+                <div id="libraryTab" class="tab-content" style="display: none;">
+                    <div class="content-header">
+                        <h1>Clip Library</h1>
+                        <div class="header-actions">
+                            <input type="text" id="librarySearch" placeholder="🔎 Search clips..." class="search-input">
+                            <select id="formatFilter" class="filter-select">
+                                <option value="">All Formats</option>
+                                <option value="tiktok">TikTok</option>
+                                <option value="youtube_shorts">YouTube Shorts</option>
+                            </select>
+                            <button onclick="loadLibrary()" class="btn btn-secondary">🔄 Refresh</button>
+                        </div>
+                    </div>
+
+                    <div id="libraryStats" class="stats-grid"></div>
+                    <div id="libraryClips" class="clips-grid"></div>
+                </div>
+
+                <!-- Edit Tab -->
+                <div id="editTab" class="tab-content" style="display: none;">
+                    <div class="content-header">
+                        <h1>Edit Clips</h1>
+                    </div>
+
+                    <!-- Upload Section -->
+                    <div class="content-card">
+                        <h3>📥 Upload Video</h3>
+                        <div id="dropZone" class="drop-zone">
+                            <div class="drop-zone-content">
+                                <div class="drop-zone-icon">📁</div>
+                                <p class="drop-zone-text">Drag & drop video files here</p>
+                                <p class="drop-zone-subtext">or click to browse</p>
+                            </div>
+                            <input type="file" id="videoFile" name="file" accept="video/*" style="display: none;" required>
+                        </div>
+                        <form id="uploadForm" enctype="multipart/form-data" style="margin-top: 20px;">
+                            <div class="form-group">
+                                <small>Supported: MP4, AVI, MOV, MKV, WEBM, FLV</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="uploadFormat">Output Format</label>
+                                <select id="uploadFormat" name="format">
+                                    <option value="tiktok">TikTok (1080x1920)</option>
+                                    <option value="youtube_shorts">YouTube Shorts (1080x1920)</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary">📤 Upload & Process</button>
+                        </form>
+                    </div>
+
+                    <!-- Edit Existing Clip Section -->
+                    <div class="content-card">
+                        <h3>✂️ Edit Existing Clip</h3>
+                        <div class="form-group">
+                            <label for="editClipSelect">Select Clip from Library</label>
+                            <select id="editClipSelect" onchange="loadClipForEditing()">
+                                <option value="">-- Select a clip --</option>
+                            </select>
+                            <button onclick="loadLibraryClipsForEdit()" class="btn btn-secondary" style="margin-top: 10px;">🔄 Refresh List</button>
+                        </div>
+                        
+                        <div id="editClipInfo" style="display: none;">
+                            <div class="clip-info-display">
+                                <p><strong>Duration:</strong> <span id="clipDuration">-</span> seconds</p>
+                                <p><strong>Dimensions:</strong> <span id="clipDimensions">-</span></p>
+                            </div>
+                        </div>
+
+                        <form id="editForm">
+                            <input type="hidden" id="editClipId" name="clip_id">
+                            <input type="hidden" id="editVideoPath" name="video_path">
+                            
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="trimStart">Trim Start (seconds)</label>
+                                    <input type="number" id="trimStart" name="trim_start" step="0.1" min="0" placeholder="0">
+                                </div>
+                                <div class="form-group">
+                                    <label for="trimEnd">Trim End (seconds)</label>
+                                    <input type="number" id="trimEnd" name="trim_end" step="0.1" min="0" placeholder="Full duration">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="speed">Speed Multiplier</label>
+                                <input type="number" id="speed" name="speed" step="0.1" min="0.1" max="5" value="1.0">
+                                <small>1.0 = normal, 2.0 = 2x speed, 0.5 = half speed</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Text Overlay</label>
+                                <input type="text" id="overlayText" name="overlay_text" placeholder="Enter text to overlay">
+                                <div class="form-row" style="margin-top: 10px;">
+                                    <div class="form-group">
+                                        <label for="overlayPosition">Position</label>
+                                        <select id="overlayPosition" name="overlay_position">
+                                            <option value="top">Top</option>
+                                            <option value="center">Center</option>
+                                            <option value="bottom" selected>Bottom</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="overlayFontSize">Font Size</label>
+                                        <input type="number" id="overlayFontSize" name="overlay_fontsize" value="48" min="20" max="100">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="overlayColor">Color</label>
+                                        <input type="color" id="overlayColor" name="overlay_color" value="#ffffff">
+                                    </div>
+                                </div>
+                                <div class="form-row" style="margin-top: 10px;">
+                                    <div class="form-group">
+                                        <label for="overlayStartTime">Start Time (seconds)</label>
+                                        <input type="number" id="overlayStartTime" name="overlay_start_time" step="0.1" min="0" value="0">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="overlayDuration">Duration (seconds)</label>
+                                        <input type="number" id="overlayDuration" name="overlay_duration" step="0.1" min="0" placeholder="Full duration">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Clip Templates</label>
+                                <select id="clipTemplate" onchange="applyTemplate()" style="width: 100%; padding: 10px; margin-bottom: 15px;">
+                                    <option value="">-- Select a template (optional) --</option>
+                                    <option value="gaming">🎮 Gaming Highlights</option>
+                                    <option value="vlog">📹 Vlog Style</option>
+                                    <option value="reaction">😱 Reaction Clips</option>
+                                    <option value="cinematic">🎬 Cinematic</option>
+                                    <option value="vibrant">🌈 Vibrant</option>
+                                </select>
+                                <small id="templateDescription" style="color: var(--text-secondary); display: block; margin-bottom: 15px;"></small>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Video Filters</label>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="filterBrightness">Brightness</label>
+                                        <input type="range" id="filterBrightness" name="filter_brightness" min="0.5" max="2.0" step="0.1" value="1.0">
+                                        <small id="brightnessValue">1.0x</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="filterContrast">Contrast</label>
+                                        <input type="range" id="filterContrast" name="filter_contrast" min="0.5" max="2.0" step="0.1" value="1.0">
+                                        <small id="contrastValue">1.0x</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="filterSaturation">Saturation</label>
+                                        <input type="range" id="filterSaturation" name="filter_saturation" min="0.0" max="2.0" step="0.1" value="1.0">
+                                        <small id="saturationValue">1.0x</small>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="editFormat">Output Format</label>
+                                <select id="editFormat" name="format">
+                                    <option value="tiktok">TikTok (1080x1920)</option>
+                                    <option value="youtube_shorts">YouTube Shorts (1080x1920)</option>
+                                </select>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary">💾 Apply Edits</button>
+                        </form>
+                    </div>
+
+                    <!-- Edit Results -->
+                    <div id="editResults" class="content-card" style="display: none; margin-top: 20px;">
+                        <h3>🎊 Edit Complete</h3>
+                        <div id="editResultsContent"></div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
     </div>
 
     <!-- Video Preview Modal -->
@@ -111,11 +312,13 @@
         <div class="modal-content">
             <span class="modal-close" onclick="closePreview()">&times;</span>
             <h3 id="previewTitle">Clip Preview</h3>
-            <video id="previewVideo" controls style="width: 100%; max-height: 80vh;">
+            <div id="previewMetadata" class="preview-metadata"></div>
+            <video id="previewVideo" controls style="width: 100%; max-height: 80vh; border-radius: 8px;">
                 Your browser does not support the video tag.
             </video>
             <div class="modal-actions">
-                <a id="previewDownload" href="#" class="btn-download" download>⬇️ Download</a>
+                <a id="previewDownload" href="#" class="btn-download" download>💾 Download</a>
+                <button onclick="copyClipLink()" class="btn btn-secondary" id="copyLinkBtn">📋 Copy Link</button>
                 <button onclick="closePreview()" class="btn btn-secondary">Close</button>
             </div>
         </div>
@@ -124,4 +327,3 @@
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
-

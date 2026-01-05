@@ -14,6 +14,7 @@ from pathlib import Path
 from clip_generator import ClipGenerator
 from clip_library import ClipLibrary
 import uuid
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # For session management
@@ -148,10 +149,14 @@ def process_video_background(job_id, url, formats):
         jobs[job_id]['progress'] = 50
         jobs[job_id]['message'] = f'Found {len(clips)} engaging clips. Creating videos...'
         
-        # Create clips
+        # Create clips with parallel processing
         video_name = Path(video_path).stem
         output_files = []
+        total_clips = len(clips) * len(formats)
+        current_clip = 0
         
+        # Prepare all clip tasks
+        clip_tasks = []
         for i, clip_info in enumerate(clips):
             start = clip_info["start_time"]
             end = clip_info["end_time"]
@@ -159,22 +164,100 @@ def process_video_background(job_id, url, formats):
             for format_type in formats:
                 output_filename = f"{video_name}_clip{i+1}_{format_type}.mp4"
                 output_path = generator.output_dir / output_filename
-                
                 clip_title = clip_info.get('title', f'Clip {i+1}')
-                if generator.create_clip(video_path, start, end, str(output_path), format_type, clip_title):
-                    thumbnail_path = generator.output_dir / f"{Path(output_path).stem}.jpg"
-                    output_files.append({
-                        'filename': output_filename,
-                        'path': str(output_path),
-                        'format': format_type,
-                        'title': clip_title,
-                        'reason': clip_info.get('reason', 'Engaging moment'),
+                
+                clip_tasks.append({
+                    'index': len(clip_tasks),
+                    'video_path': video_path,
+                    'start': start,
+                    'end': end,
+                    'output_path': str(output_path),
+                    'format_type': format_type,
+                    'clip_title': clip_title,
+                    'output_filename': output_filename,
+                    'clip_info': clip_info
+                })
+        
+        # Process clips with limited parallelism (max 2-3 at a time to avoid overwhelming system)
+        max_workers = min(3, len(clip_tasks))
+        completed = 0
+        lock = threading.Lock()
+        
+        def process_single_clip(task):
+            nonlocal completed, current_clip
+            try:
+                with lock:
+                    current_clip += 1
+                    progress = 50 + int((current_clip / total_clips) * 40)
+                    jobs[job_id]['progress'] = progress
+                    jobs[job_id]['message'] = f'Creating clip {current_clip}/{total_clips}: {task["clip_title"]} ({task["format_type"]})...'
+                
+                if generator.create_clip(task['video_path'], task['start'], task['end'], 
+                                       task['output_path'], task['format_type'], task['clip_title']):
+                    thumbnail_path = generator.output_dir / f"{Path(task['output_path']).stem}.jpg"
+                    
+                    # Get file metadata
+                    file_size = os.path.getsize(task['output_path']) if os.path.exists(task['output_path']) else 0
+                    file_size_mb = file_size / (1024 * 1024)
+                    
+                    # Get clip duration
+                    try:
+                        try:
+                            from moviepy import VideoFileClip
+                        except ImportError:
+                            from moviepy.editor import VideoFileClip
+                        temp_clip = VideoFileClip(task['output_path'])
+                        duration = temp_clip.duration
+                        temp_clip.close()
+                    except:
+                        duration = task['end'] - task['start']
+                    
+                    file_info = {
+                        'filename': task['output_filename'],
+                        'path': task['output_path'],
+                        'format': task['format_type'],
+                        'title': task['clip_title'],
+                        'reason': task['clip_info'].get('reason', 'Engaging moment'),
                         'thumbnail': str(thumbnail_path) if thumbnail_path.exists() else None,
-                        'engagement_score': clip_info.get('engagement_score', 7)
-                    })
+                        'engagement_score': task['clip_info'].get('engagement_score', 7),
+                        'file_size': file_size,
+                        'file_size_mb': round(file_size_mb, 2),
+                        'duration': round(duration, 2)
+                    }
+                    
+                    with lock:
+                        output_files.append(file_info)
+                        completed += 1
+                    
+                    return True
+                return False
+            except Exception as e:
+                print(f"Error processing clip {task['clip_title']}: {e}")
+                return False
+        
+        # Process clips in parallel using threading
+        threads = []
+        task_index = 0
+        
+        while task_index < len(clip_tasks) or any(t.is_alive() for t in threads):
+            # Start new threads up to max_workers
+            while len(threads) < max_workers and task_index < len(clip_tasks):
+                task = clip_tasks[task_index]
+                thread = threading.Thread(target=process_single_clip, args=(task,))
+                thread.daemon = True
+                thread.start()
+                threads.append(thread)
+                task_index += 1
             
-            jobs[job_id]['progress'] = 50 + int((i + 1) / len(clips) * 40)
-            jobs[job_id]['message'] = f'Processing clip {i+1}/{len(clips)}...'
+            # Remove completed threads
+            threads = [t for t in threads if t.is_alive()]
+            
+            # Small delay to prevent CPU spinning
+            time.sleep(0.1)
+        
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
         
         jobs[job_id]['status'] = 'completed'
         jobs[job_id]['progress'] = 100
@@ -374,6 +457,195 @@ def delete_library_clip(clip_id):
     if library.delete_clip(clip_id):
         return jsonify({'message': 'Clip deleted successfully'})
     return jsonify({'error': 'Clip not found'}), 404
+
+# Clip Editing API Endpoints
+ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/api/upload', methods=['POST'])
+def upload_video():
+    """Upload a video file for editing"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    format_type = request.form.get('format', 'tiktok')
+    
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'Invalid file type. Allowed: mp4, avi, mov, mkv, webm, flv'}), 400
+    
+    try:
+        # Save uploaded file
+        filename = secure_filename(file.filename)
+        upload_dir = Path("uploads")
+        upload_dir.mkdir(exist_ok=True)
+        
+        upload_path = upload_dir / filename
+        file.save(str(upload_path))
+        
+        # Process the video
+        output_filename = f"edited_{Path(filename).stem}.mp4"
+        output_path = generator.output_dir / output_filename
+        
+        if generator.process_uploaded_video(str(upload_path), str(output_path), format_type):
+            # Save to library
+            clip_data = {
+                'job_id': str(uuid.uuid4()),
+                'video_url': f'uploaded:{filename}',
+                'video_title': Path(filename).stem,
+                'filename': output_filename,
+                'path': str(output_path),
+                'thumbnail': None,
+                'format': format_type,
+                'title': f'Edited: {Path(filename).stem}',
+                'reason': 'Uploaded and processed video',
+                'engagement_score': 0,
+                'start_time': None,
+                'end_time': None,
+                'duration': None,
+                'tags': []
+            }
+            clip_id = library.save_clip(clip_data)
+            
+            return jsonify({
+                'message': 'Video uploaded and processed successfully',
+                'clip_id': clip_id,
+                'filename': output_filename,
+                'path': str(output_path)
+            })
+        else:
+            return jsonify({'error': 'Failed to process video'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/edit', methods=['POST'])
+def edit_clip():
+    """Edit an existing clip"""
+    try:
+        data = request.json
+        video_path = data.get('video_path')
+        clip_id = data.get('clip_id')  # Optional: if editing from library
+        
+        if not video_path:
+            # Try to get from clip_id
+            if clip_id:
+                clip = library.get_clip_by_id(clip_id)
+                if clip:
+                    video_path = clip['clip_path']
+                else:
+                    return jsonify({'error': 'Clip not found'}), 404
+            else:
+                return jsonify({'error': 'video_path or clip_id required'}), 400
+        
+        if not os.path.exists(video_path):
+            return jsonify({'error': 'Video file not found'}), 404
+        
+        # Get edit parameters
+        trim_start = data.get('trim_start')
+        trim_end = data.get('trim_end')
+        speed = data.get('speed')
+        text_overlay = data.get('text_overlay')
+        filters = data.get('filters')
+        format_type = data.get('format', 'tiktok')
+        
+        # Generate output filename
+        input_path = Path(video_path)
+        output_filename = f"edited_{input_path.stem}.mp4"
+        output_path = generator.output_dir / output_filename
+        
+        # Edit the clip
+        if generator.edit_clip(
+            video_path,
+            str(output_path),
+            trim_start=trim_start,
+            trim_end=trim_end,
+            speed=speed,
+            text_overlay=text_overlay,
+            format_type=format_type,
+            filters=filters
+        ):
+            # Save edited clip to library
+            clip_data = {
+                'job_id': str(uuid.uuid4()),
+                'video_url': data.get('video_url', f'edited:{input_path.name}'),
+                'video_title': input_path.stem,
+                'filename': output_filename,
+                'path': str(output_path),
+                'thumbnail': None,
+                'format': format_type,
+                'title': data.get('title', f'Edited: {input_path.stem}'),
+                'reason': data.get('reason', 'Edited clip'),
+                'engagement_score': 0,
+                'start_time': trim_start,
+                'end_time': trim_end,
+                'duration': (trim_end - trim_start) if (trim_start and trim_end) else None,
+                'tags': []
+            }
+            edited_clip_id = library.save_clip(clip_data)
+            
+            return jsonify({
+                'message': 'Clip edited successfully',
+                'clip_id': edited_clip_id,
+                'filename': output_filename,
+                'path': str(output_path)
+            })
+        else:
+            return jsonify({'error': 'Failed to edit clip'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/clip/info', methods=['POST'])
+def get_clip_info():
+    """Get information about a video clip (duration, dimensions, etc.)"""
+    try:
+        data = request.json
+        video_path = data.get('video_path')
+        clip_id = data.get('clip_id')
+        
+        if not video_path:
+            if clip_id:
+                clip = library.get_clip_by_id(clip_id)
+                if clip:
+                    video_path = clip['clip_path']
+                else:
+                    return jsonify({'error': 'Clip not found'}), 404
+            else:
+                return jsonify({'error': 'video_path or clip_id required'}), 400
+        
+        if not os.path.exists(video_path):
+            return jsonify({'error': 'Video file not found'}), 404
+        
+        # Load video to get info
+        # Import VideoFileClip from clip_generator (it's already imported there)
+        from moviepy import VideoFileClip
+        try:
+            clip = VideoFileClip(video_path)
+        except ImportError:
+            from moviepy.editor import VideoFileClip
+            clip = VideoFileClip(video_path)
+        
+        info = {
+            'duration': clip.duration,
+            'fps': clip.fps,
+            'width': clip.w,
+            'height': clip.h,
+            'size': os.path.getsize(video_path),
+            'has_audio': clip.audio is not None
+        }
+        
+        clip.close()
+        
+        return jsonify(info)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     print("=" * 60)
