@@ -388,10 +388,15 @@ def list_jobs():
 # Clip Library API Endpoints
 @app.route('/api/library/clips')
 def get_library_clips():
-    """Get clips from library with optional filters"""
+    """Get clips from library with optional filters and sorting"""
     format_type = request.args.get('format')
     search = request.args.get('search')
     min_score = request.args.get('min_score', type=float)
+    max_score = request.args.get('max_score', type=float)
+    date_from = request.args.get('date_from')
+    date_to = request.args.get('date_to')
+    sort_by = request.args.get('sort_by', 'created_at')
+    sort_order = request.args.get('sort_order', 'DESC')
     limit = request.args.get('limit', 50, type=int)
     offset = request.args.get('offset', 0, type=int)
     
@@ -400,7 +405,12 @@ def get_library_clips():
         offset=offset,
         format_type=format_type,
         search=search,
-        min_score=min_score
+        min_score=min_score,
+        max_score=max_score,
+        date_from=date_from,
+        date_to=date_to,
+        sort_by=sort_by,
+        sort_order=sort_order
     )
     
     return jsonify({
@@ -520,6 +530,88 @@ def upload_video():
             })
         else:
             return jsonify({'error': 'Failed to process video'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/compile', methods=['POST'])
+def compile_clips():
+    """Compile multiple clips into one video"""
+    try:
+        data = request.json
+        clip_ids = data.get('clip_ids', [])
+        clip_paths = data.get('clip_paths', [])
+        transition = data.get('transition', 'fade')
+        transition_duration = data.get('transition_duration', 0.5)
+        format_type = data.get('format', 'tiktok')
+        title = data.get('title', 'Compilation')
+        
+        # Get clip paths from IDs if provided
+        if clip_ids and not clip_paths:
+            clip_paths = []
+            for clip_id in clip_ids:
+                clip = library.get_clip_by_id(clip_id)
+                if clip and os.path.exists(clip['clip_path']):
+                    clip_paths.append(clip['clip_path'])
+        
+        if not clip_paths or len(clip_paths) < 2:
+            return jsonify({'error': 'At least 2 clips are required for compilation'}), 400
+        
+        # Generate output filename
+        output_filename = f"compilation_{title.replace(' ', '_')}_{int(time.time())}.mp4"
+        output_path = generator.output_dir / output_filename
+        
+        # Get compilation duration for metadata
+        total_duration = 0
+        try:
+            try:
+                from moviepy import VideoFileClip
+            except ImportError:
+                from moviepy.editor import VideoFileClip
+            for clip_path in clip_paths:
+                if os.path.exists(clip_path):
+                    temp_clip = VideoFileClip(clip_path)
+                    total_duration += temp_clip.duration
+                    temp_clip.close()
+        except:
+            pass
+        
+        # Compile clips
+        if generator.compile_clips(
+            clip_paths,
+            str(output_path),
+            transition=transition,
+            transition_duration=transition_duration,
+            format_type=format_type
+        ):
+            # Save to library
+            clip_data = {
+                'job_id': str(uuid.uuid4()),
+                'video_url': f'compiled:{len(clip_paths)}_clips',
+                'video_title': title,
+                'clip_filename': output_filename,
+                'path': str(output_path),
+                'thumbnail': str(output_path.with_suffix('.jpg')) if (output_path.with_suffix('.jpg')).exists() else None,
+                'format': format_type,
+                'title': title,
+                'reason': f'Compilation of {len(clip_paths)} clips',
+                'engagement_score': 0,
+                'start_time': None,
+                'end_time': None,
+                'duration': total_duration if total_duration > 0 else None,
+                'tags': []
+            }
+            clip_id = library.save_clip(clip_data)
+            
+            return jsonify({
+                'message': 'Clips compiled successfully',
+                'clip_id': clip_id,
+                'filename': output_filename,
+                'path': str(output_path),
+                'duration': total_duration
+            })
+        else:
+            return jsonify({'error': 'Failed to compile clips'}), 500
             
     except Exception as e:
         return jsonify({'error': str(e)}), 500

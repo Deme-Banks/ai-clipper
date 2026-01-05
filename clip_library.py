@@ -118,8 +118,13 @@ class ClipLibrary:
     def get_clips(self, limit: int = 50, offset: int = 0, 
                   format_type: Optional[str] = None,
                   search: Optional[str] = None,
-                  min_score: Optional[float] = None) -> List[Dict]:
-        """Get clips with optional filtering"""
+                  min_score: Optional[float] = None,
+                  max_score: Optional[float] = None,
+                  date_from: Optional[str] = None,
+                  date_to: Optional[str] = None,
+                  sort_by: str = "created_at",
+                  sort_order: str = "DESC") -> List[Dict]:
+        """Get clips with optional filtering and sorting"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -140,7 +145,28 @@ class ClipLibrary:
             query += " AND engagement_score >= ?"
             params.append(min_score)
         
-        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        if max_score is not None:
+            query += " AND engagement_score <= ?"
+            params.append(max_score)
+        
+        if date_from:
+            query += " AND DATE(created_at) >= ?"
+            params.append(date_from)
+        
+        if date_to:
+            query += " AND DATE(created_at) <= ?"
+            params.append(date_to)
+        
+        # Validate sort_by to prevent SQL injection
+        valid_sort_fields = ["created_at", "engagement_score", "views", "downloads", "duration", "clip_title"]
+        if sort_by not in valid_sort_fields:
+            sort_by = "created_at"
+        
+        # Validate sort_order
+        if sort_order.upper() not in ["ASC", "DESC"]:
+            sort_order = "DESC"
+        
+        query += f" ORDER BY {sort_by} {sort_order} LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         
         cursor.execute(query, params)

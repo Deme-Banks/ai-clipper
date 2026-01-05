@@ -420,6 +420,7 @@ window.showTab = function(tabName) {
     // Load clips for editing if switching to edit tab
     if (tabName === 'edit') {
         loadLibraryClipsForEdit();
+        setTimeout(() => loadClipsForCompilation(), 500);
     }
 }
 
@@ -458,6 +459,12 @@ function initializeLibrarySearch() {
 async function loadLibrary() {
     const search = document.getElementById('librarySearch')?.value || '';
     const format = document.getElementById('formatFilter')?.value || '';
+    const sortBy = document.getElementById('sortBy')?.value || 'created_at';
+    const sortOrder = document.getElementById('sortOrder')?.value || 'DESC';
+    const minScore = document.getElementById('minScore')?.value;
+    const maxScore = document.getElementById('maxScore')?.value;
+    const dateFrom = document.getElementById('dateFrom')?.value;
+    const dateTo = document.getElementById('dateTo')?.value;
     const clipsDiv = document.getElementById('libraryClips');
     
     // Show loading skeletons
@@ -477,10 +484,16 @@ async function loadLibrary() {
         const stats = await statsResponse.json();
         displayLibraryStats(stats);
         
-        // Load clips
+        // Load clips with all filters
         const params = new URLSearchParams();
         if (search) params.append('search', search);
         if (format) params.append('format', format);
+        if (sortBy) params.append('sort_by', sortBy);
+        if (sortOrder) params.append('sort_order', sortOrder);
+        if (minScore) params.append('min_score', minScore);
+        if (maxScore) params.append('max_score', maxScore);
+        if (dateFrom) params.append('date_from', dateFrom);
+        if (dateTo) params.append('date_to', dateTo);
         params.append('limit', '50');
         
         const clipsResponse = await fetch(`/api/library/clips?${params}`);
@@ -502,6 +515,18 @@ async function loadLibrary() {
             `;
         }
     }
+}
+
+function clearFilters() {
+    document.getElementById('librarySearch').value = '';
+    document.getElementById('formatFilter').value = '';
+    document.getElementById('sortBy').value = 'created_at';
+    document.getElementById('sortOrder').value = 'DESC';
+    document.getElementById('minScore').value = '';
+    document.getElementById('maxScore').value = '';
+    document.getElementById('dateFrom').value = '';
+    document.getElementById('dateTo').value = '';
+    loadLibrary();
 }
 
 function displayLibraryStats(stats) {
@@ -1206,6 +1231,200 @@ initializeDragAndDrop();
 
 // Initialize keyboard shortcuts
 initializeKeyboardShortcuts();
+}
+
+// Compilation Functions
+let compilationClips = [];
+
+async function loadClipsForCompilation() {
+    try {
+        const response = await fetch('/api/library/clips?limit=100');
+        const data = await response.json();
+        compilationClips = data.clips || [];
+        
+        const compileList = document.getElementById('compileClipsList');
+        if (!compileList) return;
+        
+        if (compilationClips.length === 0) {
+            compileList.innerHTML = '<p style="color: var(--text-secondary); text-align: center;">No clips available. Create some clips first!</p>';
+            return;
+        }
+        
+        compileList.innerHTML = compilationClips.map(clip => {
+            const formatEmoji = clip.format_type === 'tiktok' ? '🎵' : '📺';
+            const duration = clip.duration ? formatDuration(clip.duration) : 'Unknown';
+            
+            return `
+                <div class="compile-clip-item" onclick="toggleCompileClip(${clip.id}, this)">
+                    <input type="checkbox" id="compile_${clip.id}" onchange="updateCompileSelection()" data-clip-id="${clip.id}">
+                    <div class="compile-clip-item-title">${formatEmoji} ${clip.clip_title || 'Untitled'}</div>
+                    <div class="compile-clip-item-meta">${clip.format_type} • ${duration}</div>
+                </div>
+            `;
+        }).join('');
+        
+        updateCompileSelection();
+    } catch (error) {
+        console.error('Error loading clips for compilation:', error);
+        const compileList = document.getElementById('compileClipsList');
+        if (compileList) {
+            compileList.innerHTML = '<p style="color: var(--error-color); text-align: center;">Error loading clips</p>';
+        }
+    }
+}
+
+function toggleCompileClip(clipId, element) {
+    const checkbox = element.querySelector('input[type="checkbox"]');
+    checkbox.checked = !checkbox.checked;
+    updateCompileSelection();
+}
+
+function updateCompileSelection() {
+    const checkboxes = document.querySelectorAll('#compileClipsList input[type="checkbox"]:checked');
+    const count = checkboxes.length;
+    const countEl = document.getElementById('selectedClipsCount');
+    const infoEl = document.getElementById('selectedClipsInfo');
+    
+    if (countEl) countEl.textContent = count;
+    if (infoEl) infoEl.style.display = count > 0 ? 'block' : 'none';
+    
+    // Update visual selection
+    document.querySelectorAll('.compile-clip-item').forEach(item => {
+        const checkbox = item.querySelector('input[type="checkbox"]');
+        if (checkbox && checkbox.checked) {
+            item.classList.add('selected');
+        } else {
+            item.classList.remove('selected');
+        }
+    });
+}
+
+// Compile form handler
+const compileForm = document.getElementById('compileForm');
+if (compileForm) {
+    compileForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const checkboxes = document.querySelectorAll('#compileClipsList input[type="checkbox"]:checked');
+        if (checkboxes.length < 2) {
+            alert('Please select at least 2 clips to compile');
+            return;
+        }
+        
+        const clipIds = Array.from(checkboxes).map(cb => parseInt(cb.dataset.clipId));
+        const title = document.getElementById('compileTitle').value || 'Compilation';
+        const transition = document.getElementById('compileTransition').value;
+        const transitionDuration = parseFloat(document.getElementById('transitionDuration').value);
+        const format = document.getElementById('compileFormat').value;
+        
+        const submitBtn = e.target.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Compiling...';
+        
+        try {
+            const response = await fetch('/api/compile', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    clip_ids: clipIds,
+                    title: title,
+                    transition: transition,
+                    transition_duration: transitionDuration,
+                    format: format
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                // Show success notification
+                const successMsg = document.createElement('div');
+                successMsg.style.cssText = 'position: fixed; top: 20px; right: 20px; background: var(--accent-red); color: white; padding: 15px 20px; border-radius: 8px; z-index: 10000; box-shadow: 0 4px 12px rgba(0,0,0,0.3);';
+                successMsg.innerHTML = '🎊 Compilation created successfully!';
+                document.body.appendChild(successMsg);
+                
+                setTimeout(() => {
+                    successMsg.style.opacity = '0';
+                    successMsg.style.transition = 'opacity 0.3s';
+                    setTimeout(() => successMsg.remove(), 300);
+                }, 3000);
+                
+                // Show results
+                const resultsDiv = document.getElementById('compileResults');
+                const resultsContent = document.getElementById('compileResultsContent');
+                
+                resultsContent.innerHTML = `
+                    <p>🎊 Compilation created successfully!</p>
+                    <p><strong>Title:</strong> ${title}</p>
+                    <p><strong>Clips:</strong> ${clipIds.length}</p>
+                    <p><strong>Filename:</strong> ${data.filename}</p>
+                    <div style="margin-top: 15px;">
+                        <a href="/api/library/clip/${data.clip_id}/download" class="btn-download" download>💾 Download Compilation</a>
+                    </div>
+                `;
+                
+                resultsDiv.style.display = 'block';
+                resultsDiv.scrollIntoView({ behavior: 'smooth' });
+                
+                // Reset form
+                document.querySelectorAll('#compileClipsList input[type="checkbox"]').forEach(cb => cb.checked = false);
+                updateCompileSelection();
+                document.getElementById('compileTitle').value = 'Compilation';
+                
+                // Auto-refresh library if on library tab
+                if (document.getElementById('libraryTab')?.classList.contains('active')) {
+                    setTimeout(() => loadLibrary(), 1000);
+                }
+            } else {
+                alert('Error: ' + (data.error || 'Compilation failed'));
+            }
+        } catch (error) {
+            console.error('Compile error:', error);
+            alert('Error compiling clips');
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.textContent = '🎬 Compile Clips';
+        }
+    });
+}
+
+// Theme Toggle
+function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+    
+    // Update theme button text
+    const themeBtn = document.querySelector('[onclick="toggleTheme()"]');
+    if (themeBtn) {
+        const icon = themeBtn.querySelector('.nav-icon');
+        if (icon) {
+            icon.textContent = newTheme === 'light' ? '🌙' : '☀️';
+        }
+    }
+}
+
+// Load saved theme
+function loadTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    
+    // Update theme button
+    const themeBtn = document.querySelector('[onclick="toggleTheme()"]');
+    if (themeBtn) {
+        const icon = themeBtn.querySelector('.nav-icon');
+        if (icon) {
+            icon.textContent = savedTheme === 'light' ? '🌙' : '☀️';
+        }
+    }
+}
+
+// Initialize theme on load
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadTheme);
+} else {
+    loadTheme();
 }
 
 // Drag and Drop Functionality

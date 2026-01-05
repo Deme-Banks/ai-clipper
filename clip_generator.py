@@ -94,12 +94,139 @@ class ClipGenerator:
         # Create output directories
         self.output_dir = Path("output")
         self.downloads_dir = Path("downloads")
+        self.cache_dir = Path("cache")
         self.output_dir.mkdir(exist_ok=True)
         self.downloads_dir.mkdir(exist_ok=True)
+        self.cache_dir.mkdir(exist_ok=True)
+        
+        # Cache configuration
+        self.cache_enabled = self.config.get("cache", {}).get("enabled", True)
+        self.cache_max_size_gb = self.config.get("cache", {}).get("max_size_gb", 10)
+        self.cache_max_age_days = self.config.get("cache", {}).get("max_age_days", 30)
+    
+    def _get_cache_key(self, url: str) -> str:
+        """Generate cache key from URL"""
+        import hashlib
+        return hashlib.md5(url.encode()).hexdigest()
+    
+    def _get_cached_video(self, url: str) -> Optional[str]:
+        """Check if video is cached and return path if valid"""
+        if not self.cache_enabled:
+            return None
+        
+        cache_key = self._get_cache_key(url)
+        cache_file = self.cache_dir / f"{cache_key}.mp4"
+        cache_meta = self.cache_dir / f"{cache_key}.json"
+        
+        if cache_file.exists() and cache_meta.exists():
+            try:
+                # Check cache metadata
+                with open(cache_meta, 'r') as f:
+                    meta = json.load(f)
+                
+                # Check if cache is expired
+                from datetime import datetime, timedelta
+                cache_date = datetime.fromisoformat(meta.get('cached_at', ''))
+                age = datetime.now() - cache_date
+                
+                if age.days > self.cache_max_age_days:
+                    print(f"🗑️  Cache expired for {url}, removing...")
+                    cache_file.unlink()
+                    cache_meta.unlink()
+                    return None
+                
+                # Verify file exists and is valid
+                if cache_file.stat().st_size > 0:
+                    print(f"💾 Using cached video: {meta.get('title', 'Unknown')}")
+                    return str(cache_file)
+                else:
+                    # Corrupted cache, remove it
+                    cache_file.unlink()
+                    cache_meta.unlink()
+            except Exception as e:
+                print(f"⚠️  Error reading cache metadata: {e}")
+                return None
+        
+        return None
+    
+    def _save_to_cache(self, url: str, video_path: str, video_info: Dict):
+        """Save downloaded video to cache"""
+        if not self.cache_enabled:
+            return
+        
+        try:
+            cache_key = self._get_cache_key(url)
+            cache_file = self.cache_dir / f"{cache_key}.mp4"
+            cache_meta = self.cache_dir / f"{cache_key}.json"
+            
+            # Copy file to cache (or move if from downloads)
+            import shutil
+            if video_path != str(cache_file):
+                shutil.copy2(video_path, cache_file)
+            
+            # Save metadata
+            from datetime import datetime
+            metadata = {
+                'url': url,
+                'title': video_info.get('title', 'Unknown'),
+                'cached_at': datetime.now().isoformat(),
+                'duration': video_info.get('duration', 0),
+                'size': cache_file.stat().st_size
+            }
+            
+            with open(cache_meta, 'w') as f:
+                json.dump(metadata, f)
+            
+            # Clean up old cache if needed
+            self._cleanup_cache()
+            
+        except Exception as e:
+            print(f"⚠️  Error saving to cache: {e}")
+    
+    def _cleanup_cache(self):
+        """Clean up old cache files if cache size exceeds limit"""
+        try:
+            cache_files = list(self.cache_dir.glob("*.mp4"))
+            if not cache_files:
+                return
+            
+            # Calculate total cache size
+            total_size = sum(f.stat().st_size for f in cache_files)
+            max_size_bytes = self.cache_max_size_gb * 1024 * 1024 * 1024
+            
+            if total_size > max_size_bytes:
+                print(f"🧹 Cache size ({total_size / (1024**3):.2f} GB) exceeds limit ({self.cache_max_size_gb} GB), cleaning up...")
+                
+                # Sort by modification time (oldest first)
+                cache_files.sort(key=lambda f: f.stat().st_mtime)
+                
+                # Remove oldest files until under limit
+                for cache_file in cache_files:
+                    if total_size <= max_size_bytes * 0.9:  # Clean to 90% of limit
+                        break
+                    
+                    cache_key = cache_file.stem
+                    meta_file = self.cache_dir / f"{cache_key}.json"
+                    
+                    file_size = cache_file.stat().st_size
+                    cache_file.unlink()
+                    if meta_file.exists():
+                        meta_file.unlink()
+                    
+                    total_size -= file_size
+                    print(f"🗑️  Removed old cache: {cache_key}")
+        
+        except Exception as e:
+            print(f"⚠️  Error cleaning cache: {e}")
     
     def download_video(self, url: str) -> Optional[str]:
-        """Download video from Twitch or YouTube URL"""
-        print(f"ðŸ“¥ Downloading video from: {url}")
+        """Download video from Twitch or YouTube URL (with caching)"""
+        # Check cache first
+        cached_path = self._get_cached_video(url)
+        if cached_path:
+            return cached_path
+        
+        print(f"📥 Downloading video from: {url}")
         
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
@@ -118,7 +245,15 @@ class ClipGenerator:
                     if os.path.exists(filename):
                         os.rename(filename, new_filename)
                     filename = new_filename
-                print(f"âœ… Downloaded: {filename}")
+                
+                # Save to cache
+                video_info = {
+                    'title': info.get('title', 'Unknown'),
+                    'duration': info.get('duration', 0)
+                }
+                self._save_to_cache(url, filename, video_info)
+                
+                print(f"✅ Downloaded: {filename}")
                 return filename
         except Exception as e:
             print(f"âŒ Error downloading video: {e}")
@@ -978,6 +1113,108 @@ Requirements:
         except Exception as e:
             print(f"⚠️  Error applying filters: {e}")
             return clip
+    
+    def compile_clips(self, clip_paths: List[str], output_path: str, 
+                     transition: str = "fade", transition_duration: float = 0.5,
+                     format_type: str = "tiktok") -> bool:
+        """
+        Compile multiple clips into one video with transitions
+        
+        Args:
+            clip_paths: List of paths to video clips to merge
+            output_path: Path to save compiled video
+            transition: Type of transition ('fade', 'cut', 'crossfade', 'none')
+            transition_duration: Duration of transition in seconds
+            format_type: Output format (tiktok/youtube_shorts)
+        """
+        print(f"🎬 Compiling {len(clip_paths)} clips with {transition} transition...")
+        
+        if not clip_paths:
+            print("❌ No clips provided for compilation")
+            return False
+        
+        clips = []
+        try:
+            # Load all clips
+            for i, clip_path in enumerate(clip_paths):
+                if not os.path.exists(clip_path):
+                    print(f"⚠️  Clip not found: {clip_path}, skipping...")
+                    continue
+                
+                clip = VideoFileClip(clip_path)
+                
+                # Get format settings and resize if needed
+                format_config = self.config["output_formats"].get(format_type, self.config["output_formats"]["tiktok"])
+                target_width = format_config["width"]
+                target_height = format_config["height"]
+                
+                # Resize to match format
+                if clip.w != target_width or clip.h != target_height:
+                    clip = self._resize_to_vertical(clip, target_width, target_height)
+                
+                clips.append(clip)
+                print(f"✅ Loaded clip {i+1}/{len(clip_paths)}: {Path(clip_path).name}")
+            
+            if not clips:
+                print("❌ No valid clips to compile")
+                return False
+            
+            # Apply transitions
+            if transition == "fade" and len(clips) > 1:
+                # Add fade in/out to clips
+                for i, clip in enumerate(clips):
+                    if i == 0:
+                        # Fade in first clip
+                        clips[i] = clip.fadein(transition_duration)
+                    elif i == len(clips) - 1:
+                        # Fade out last clip
+                        clips[i] = clip.fadeout(transition_duration)
+                    else:
+                        # Fade in and out for middle clips
+                        clips[i] = clip.fadein(transition_duration).fadeout(transition_duration)
+            
+            elif transition == "crossfade" and len(clips) > 1:
+                # Crossfade between clips (overlap)
+                for i in range(len(clips) - 1):
+                    clips[i] = clips[i].fadeout(transition_duration)
+                    clips[i+1] = clips[i+1].fadein(transition_duration)
+            
+            # Concatenate clips
+            final_clip = concatenate_videoclips(clips, method="compose")
+            
+            # Get format settings
+            format_config = self.config["output_formats"].get(format_type, self.config["output_formats"]["tiktok"])
+            
+            # Write output
+            final_clip.write_videofile(
+                output_path,
+                codec='libx264',
+                audio_codec='aac',
+                fps=format_config["fps"],
+                preset='medium',
+                bitrate='8000k'
+            )
+            
+            # Generate thumbnail
+            self._generate_thumbnail(final_clip, output_path)
+            
+            # Clean up
+            final_clip.close()
+            for clip in clips:
+                clip.close()
+            
+            print(f"✅ Compiled video saved: {output_path}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error compiling clips: {e}")
+            # Clean up on error
+            for clip in clips:
+                try:
+                    clip.close()
+                except:
+                    pass
+            return False
     
     def _add_text_overlay(self, clip: VideoFileClip, overlay_config: Dict) -> CompositeVideoClip:
         """Add text overlay to clip"""

@@ -40,6 +40,13 @@
                     <button class="new-playlist-btn" id="newClipBtn">NEW CLIP</button>
                 </div>
 
+                <div class="sidebar-section" style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border-color);">
+                    <div class="nav-item" onclick="toggleTheme()" style="cursor: pointer;">
+                        <span class="nav-icon">🌓</span>
+                        <span class="nav-text">Theme</span>
+                    </div>
+                </div>
+
                 <div class="sidebar-section">
                     <div class="sidebar-title">Recent</div>
                     <div id="recentClips" class="recent-clips"></div>
@@ -138,7 +145,34 @@
                                 <option value="tiktok">TikTok</option>
                                 <option value="youtube_shorts">YouTube Shorts</option>
                             </select>
+                            <select id="sortBy" class="filter-select" onchange="loadLibrary()">
+                                <option value="created_at">Sort by Date</option>
+                                <option value="engagement_score">Sort by Engagement</option>
+                                <option value="views">Sort by Views</option>
+                                <option value="downloads">Sort by Downloads</option>
+                                <option value="duration">Sort by Duration</option>
+                                <option value="clip_title">Sort by Title</option>
+                            </select>
+                            <select id="sortOrder" class="filter-select" onchange="loadLibrary()">
+                                <option value="DESC">Newest First</option>
+                                <option value="ASC">Oldest First</option>
+                            </select>
                             <button onclick="loadLibrary()" class="btn btn-secondary">🔄 Refresh</button>
+                        </div>
+                        <div class="advanced-filters" style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                            <div style="display: flex; gap: 5px; align-items: center;">
+                                <label style="font-size: 12px; color: var(--text-secondary);">Engagement:</label>
+                                <input type="number" id="minScore" placeholder="Min" min="0" max="10" step="0.1" style="width: 60px; padding: 5px;" onchange="loadLibrary()">
+                                <span style="color: var(--text-secondary);">-</span>
+                                <input type="number" id="maxScore" placeholder="Max" min="0" max="10" step="0.1" style="width: 60px; padding: 5px;" onchange="loadLibrary()">
+                            </div>
+                            <div style="display: flex; gap: 5px; align-items: center;">
+                                <label style="font-size: 12px; color: var(--text-secondary);">Date:</label>
+                                <input type="date" id="dateFrom" style="padding: 5px; font-size: 12px;" onchange="loadLibrary()">
+                                <span style="color: var(--text-secondary);">to</span>
+                                <input type="date" id="dateTo" style="padding: 5px; font-size: 12px;" onchange="loadLibrary()">
+                            </div>
+                            <button onclick="clearFilters()" class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px;">Clear Filters</button>
                         </div>
                     </div>
 
@@ -300,6 +334,61 @@
                     <div id="editResults" class="content-card" style="display: none; margin-top: 20px;">
                         <h3>🎊 Edit Complete</h3>
                         <div id="editResultsContent"></div>
+                    </div>
+
+                    <!-- Compile Clips Section -->
+                    <div class="content-card" style="margin-top: 20px;">
+                        <h3>🎬 Compile Clips</h3>
+                        <p style="color: var(--text-secondary); margin-bottom: 20px;">Merge multiple clips into one video with transitions</p>
+                        
+                        <div class="form-group">
+                            <label>Select Clips from Library</label>
+                            <div id="compileClipsList" class="compile-clips-list" style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; padding: 15px; margin-top: 10px;">
+                                <p style="color: var(--text-secondary); text-align: center;">Loading clips...</p>
+                            </div>
+                            <button onclick="loadClipsForCompilation()" class="btn btn-secondary" style="margin-top: 10px;">🔄 Refresh Clips</button>
+                        </div>
+
+                        <form id="compileForm">
+                            <div class="form-group">
+                                <label for="compileTitle">Compilation Title</label>
+                                <input type="text" id="compileTitle" name="title" placeholder="My Awesome Compilation" value="Compilation">
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="compileTransition">Transition</label>
+                                    <select id="compileTransition" name="transition">
+                                        <option value="fade">Fade</option>
+                                        <option value="crossfade">Crossfade</option>
+                                        <option value="cut">Cut (No Transition)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="transitionDuration">Transition Duration (seconds)</label>
+                                    <input type="number" id="transitionDuration" name="transition_duration" step="0.1" min="0" max="2" value="0.5">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="compileFormat">Output Format</label>
+                                <select id="compileFormat" name="format">
+                                    <option value="tiktok">TikTok (1080x1920)</option>
+                                    <option value="youtube_shorts">YouTube Shorts (1080x1920)</option>
+                                </select>
+                            </div>
+
+                            <div id="selectedClipsInfo" style="margin: 15px 0; padding: 10px; background: var(--bg-tertiary); border-radius: 8px; display: none;">
+                                <strong>Selected:</strong> <span id="selectedClipsCount">0</span> clips
+                            </div>
+
+                            <button type="submit" class="btn btn-primary">🎬 Compile Clips</button>
+                        </form>
+
+                        <div id="compileResults" class="content-card" style="display: none; margin-top: 20px;">
+                            <h3>🎊 Compilation Complete</h3>
+                            <div id="compileResultsContent"></div>
+                        </div>
                     </div>
                 </div>
             </main>

@@ -831,6 +831,49 @@ body {
     color: var(--text-primary);
 }
 
+/* Compilation Styles */
+.compile-clips-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+}
+
+.compile-clip-item {
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    padding: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--bg-secondary);
+}
+
+.compile-clip-item:hover {
+    border-color: var(--accent-red);
+    background: var(--bg-tertiary);
+}
+
+.compile-clip-item.selected {
+    border-color: var(--accent-red);
+    background: rgba(229, 9, 20, 0.1);
+}
+
+.compile-clip-item input[type="checkbox"] {
+    margin-right: 8px;
+    accent-color: var(--accent-red);
+}
+
+.compile-clip-item-title {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 5px;
+    color: var(--text-primary);
+}
+
+.compile-clip-item-meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
 /* Responsive */
 /* Drag & Drop Zone */
 .drop-zone {
