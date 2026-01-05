@@ -12,6 +12,7 @@ import threading
 import time
 from pathlib import Path
 from clip_generator import ClipGenerator
+from clip_library import ClipLibrary
 import uuid
 
 app = Flask(__name__)
@@ -21,8 +22,9 @@ CORS(app)
 # Store processing jobs
 jobs = {}
 
-# Initialize clip generator
+# Initialize clip generator and library
 generator = ClipGenerator()
+library = ClipLibrary()
 
 @app.route('/')
 def index():
@@ -179,10 +181,49 @@ def process_video_background(job_id, url, formats):
         jobs[job_id]['message'] = f'Successfully created {len(output_files)} clips!'
         jobs[job_id]['output_files'] = output_files
         
+        # Save to library
+        library.save_job({
+            'job_id': job_id,
+            'video_url': url,
+            'status': 'completed',
+            'formats': formats,
+            'output_count': len(output_files)
+        })
+        
+        # Save each clip to library
+        video_title = Path(video_path).stem
+        for file_info in output_files:
+            clip_data = {
+                'job_id': job_id,
+                'video_url': url,
+                'video_title': video_title,
+                'filename': file_info['filename'],
+                'path': file_info['path'],
+                'thumbnail': file_info.get('thumbnail'),
+                'format': file_info['format'],
+                'title': file_info['title'],
+                'reason': file_info.get('reason'),
+                'engagement_score': file_info.get('engagement_score', 0),
+                'start_time': None,  # Could extract from clip_info if needed
+                'end_time': None,
+                'duration': None,
+                'tags': []
+            }
+            library.save_clip(clip_data)
+        
     except Exception as e:
         jobs[job_id]['status'] = 'error'
         jobs[job_id]['error'] = str(e)
         jobs[job_id]['message'] = f'Error: {str(e)}'
+        
+        # Save failed job
+        library.save_job({
+            'job_id': job_id,
+            'video_url': url,
+            'status': 'error',
+            'formats': formats,
+            'output_count': 0
+        })
 
 @app.route('/api/status/<job_id>')
 def get_status(job_id):

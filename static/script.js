@@ -172,3 +172,153 @@ window.addEventListener('beforeunload', () => {
     }
 });
 
+// Tab Management
+function showTab(tabName) {
+    // Hide all tabs
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+        tab.style.display = 'none';
+    });
+    
+    // Remove active class from all buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    // Show selected tab
+    const tab = document.getElementById(tabName + 'Tab');
+    if (tab) {
+        tab.classList.add('active');
+        tab.style.display = 'block';
+    }
+    
+    // Add active class to button
+    event.target.classList.add('active');
+    
+    // Load library if switching to library tab
+    if (tabName === 'library') {
+        loadLibrary();
+    }
+}
+
+// Library Functions
+let librarySearchTimeout;
+
+document.getElementById('librarySearch')?.addEventListener('input', (e) => {
+    clearTimeout(librarySearchTimeout);
+    librarySearchTimeout = setTimeout(() => {
+        loadLibrary();
+    }, 500);
+});
+
+document.getElementById('formatFilter')?.addEventListener('change', () => {
+    loadLibrary();
+});
+
+async function loadLibrary() {
+    const search = document.getElementById('librarySearch')?.value || '';
+    const format = document.getElementById('formatFilter')?.value || '';
+    
+    try {
+        // Load statistics
+        const statsResponse = await fetch('/api/library/statistics');
+        const stats = await statsResponse.json();
+        displayLibraryStats(stats);
+        
+        // Load clips
+        const params = new URLSearchParams();
+        if (search) params.append('search', search);
+        if (format) params.append('format', format);
+        params.append('limit', '50');
+        
+        const clipsResponse = await fetch(`/api/library/clips?${params}`);
+        const data = await clipsResponse.json();
+        displayLibraryClips(data.clips);
+        
+    } catch (error) {
+        console.error('Error loading library:', error);
+    }
+}
+
+function displayLibraryStats(stats) {
+    const statsDiv = document.getElementById('libraryStats');
+    if (!statsDiv) return;
+    
+    statsDiv.innerHTML = `
+        <div class="stat-card">
+            <div class="stat-value">${stats.total_clips || 0}</div>
+            <div class="stat-label">Total Clips</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${stats.total_views || 0}</div>
+            <div class="stat-label">Total Views</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${stats.total_downloads || 0}</div>
+            <div class="stat-label">Total Downloads</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${(stats.avg_engagement || 0).toFixed(1)}</div>
+            <div class="stat-label">Avg Engagement</div>
+        </div>
+    `;
+}
+
+function displayLibraryClips(clips) {
+    const clipsDiv = document.getElementById('libraryClips');
+    if (!clipsDiv) return;
+    
+    if (clips.length === 0) {
+        clipsDiv.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">No clips found. Create some clips to see them here!</p>';
+        return;
+    }
+    
+    clipsDiv.innerHTML = clips.map(clip => {
+        const formatEmoji = clip.format_type === 'tiktok' ? '📱' : '🎯';
+        const scoreStars = '⭐'.repeat(Math.min(5, Math.floor((clip.engagement_score || 0) / 2)));
+        const thumbnailUrl = clip.thumbnail_path ? `/api/thumbnail/${clip.job_id}/${clip.clip_filename}` : '';
+        
+        return `
+            <div class="clip-item">
+                ${thumbnailUrl ? `
+                <div class="clip-thumbnail">
+                    <img src="${thumbnailUrl}" alt="Clip thumbnail" onerror="this.style.display='none'">
+                </div>
+                ` : ''}
+                <div class="clip-info">
+                    <div class="clip-title">${formatEmoji} ${clip.clip_title || 'Untitled'}</div>
+                    <div class="clip-details">${clip.video_title || 'Unknown'} • ${clip.format_type}</div>
+                    ${clip.reason ? `<div class="clip-reason">${clip.reason}</div>` : ''}
+                    ${clip.engagement_score > 0 ? `<div class="clip-score">Score: ${scoreStars} (${clip.engagement_score}/10)</div>` : ''}
+                    <div class="clip-meta">Views: ${clip.views || 0} • Downloads: ${clip.downloads || 0}</div>
+                </div>
+                <div class="clip-actions">
+                    <a href="/api/library/clip/${clip.id}/download" class="btn-download" download>
+                        ⬇️ Download
+                    </a>
+                    <button onclick="deleteClip(${clip.id})" class="btn-delete">🗑️ Delete</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function deleteClip(clipId) {
+    if (!confirm('Are you sure you want to delete this clip?')) return;
+    
+    try {
+        const response = await fetch(`/api/library/clip/${clipId}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            loadLibrary();
+        } else {
+            alert('Failed to delete clip');
+        }
+    } catch (error) {
+        console.error('Error deleting clip:', error);
+        alert('Error deleting clip');
+    }
+}
+

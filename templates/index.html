@@ -14,6 +14,14 @@
         </header>
 
         <main>
+            <!-- Navigation Tabs -->
+            <div class="tabs">
+                <button class="tab-btn active" onclick="showTab('create')">🎬 Create Clips</button>
+                <button class="tab-btn" onclick="showTab('library')">📚 Library</button>
+            </div>
+
+            <!-- Create Tab -->
+            <div id="createTab" class="tab-content active">
             <div class="card">
                 <h2>Create Viral Clips</h2>
                 <form id="videoForm">
@@ -71,6 +79,25 @@
             <div id="errorSection" class="card error-card" style="display: none;">
                 <h3>❌ Error</h3>
                 <p id="errorMessage"></p>
+            </div>
+            </div>
+
+            <!-- Library Tab -->
+            <div id="libraryTab" class="tab-content" style="display: none;">
+                <div class="card">
+                    <h2>📚 Clip Library</h2>
+                    <div class="library-controls">
+                        <input type="text" id="librarySearch" placeholder="🔍 Search clips..." class="search-input">
+                        <select id="formatFilter" class="filter-select">
+                            <option value="">All Formats</option>
+                            <option value="tiktok">TikTok</option>
+                            <option value="youtube_shorts">YouTube Shorts</option>
+                        </select>
+                        <button onclick="loadLibrary()" class="btn btn-secondary">🔄 Refresh</button>
+                    </div>
+                    <div id="libraryStats" class="library-stats"></div>
+                    <div id="libraryClips" class="library-clips"></div>
+                </div>
             </div>
         </main>
 
