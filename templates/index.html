@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎬 AI Clip Generator - Viral Content Creator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 AI Clip Generator</h1>
+            <p class="subtitle">Transform videos into viral TikTok & YouTube Shorts</p>
+        </header>
+
+        <main>
+            <div class="card">
+                <h2>Create Viral Clips</h2>
+                <form id="videoForm">
+                    <div class="form-group">
+                        <label for="videoUrl">Video URL</label>
+                        <input 
+                            type="url" 
+                            id="videoUrl" 
+                            name="url" 
+                            placeholder="https://www.youtube.com/watch?v=..." 
+                            required
+                        >
+                        <small>Supports YouTube and Twitch URLs</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Output Formats</label>
+                        <div class="checkbox-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="formats" value="tiktok" checked>
+                                <span>📱 TikTok (1080x1920)</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="formats" value="youtube_shorts" checked>
+                                <span>🎯 YouTube Shorts (1080x1920)</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <button type="submit" id="submitBtn" class="btn btn-primary">
+                        <span id="btnText">🚀 Generate Clips</span>
+                        <span id="btnLoader" class="loader" style="display: none;"></span>
+                    </button>
+                </form>
+            </div>
+
+            <!-- Progress Section -->
+            <div id="progressSection" class="card" style="display: none;">
+                <h3>Processing Status</h3>
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <p id="progressText" class="progress-text">Starting...</p>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div id="resultsSection" class="card" style="display: none;">
+                <h3>✨ Generated Clips</h3>
+                <div id="clipsList" class="clips-list"></div>
+            </div>
+
+            <!-- Error Section -->
+            <div id="errorSection" class="card error-card" style="display: none;">
+                <h3>❌ Error</h3>
+                <p id="errorMessage"></p>
+            </div>
+        </main>
+
+        <footer>
+            <p>Powered by OpenAI • Made for content creators 🚀</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
+

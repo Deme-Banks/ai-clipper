@@ -66,7 +66,31 @@ OPENAI_API_KEY=your_api_key_here
 
 ## 🚀 Usage
 
-### Basic Usage
+### 🌐 Web Interface (Recommended)
+
+The easiest way to use the AI Clip Generator is through the web interface:
+
+1. **Start the web server:**
+   ```bash
+   python app.py
+   ```
+   
+   Or on Windows:
+   ```bash
+   run_web.bat
+   ```
+
+2. **Open your browser:**
+   - Local access: http://localhost:5000
+   - Network access: http://YOUR_IP:5000 (accessible from other devices on your network)
+
+3. **Use the interface:**
+   - Paste a YouTube or Twitch URL
+   - Select output formats (TikTok, YouTube Shorts, or both)
+   - Click "Generate Clips"
+   - Watch the progress and download your clips when ready!
+
+### 💻 Command Line Usage
 
 Create clips for both TikTok and YouTube Shorts:
 ```bash

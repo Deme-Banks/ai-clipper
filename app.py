@@ -1,0 +1,204 @@
+"""
+Flask Web Application for AI Clip Generator
+Run with: python app.py
+Access at: http://localhost:5000
+"""
+
+from flask import Flask, render_template, request, jsonify, send_file, session
+from flask_cors import CORS
+import os
+import json
+import threading
+import time
+from pathlib import Path
+from clip_generator import ClipGenerator
+import uuid
+
+app = Flask(__name__)
+app.secret_key = os.urandom(24)  # For session management
+CORS(app)
+
+# Store processing jobs
+jobs = {}
+
+# Initialize clip generator
+generator = ClipGenerator()
+
+@app.route('/')
+def index():
+    """Main page"""
+    return render_template('index.html')
+
+@app.route('/api/process', methods=['POST'])
+def process_video():
+    """Start video processing"""
+    try:
+        data = request.json
+        url = data.get('url', '').strip()
+        formats = data.get('formats', ['tiktok', 'youtube_shorts'])
+        
+        if not url:
+            return jsonify({'error': 'URL is required'}), 400
+        
+        # Validate URL
+        if not (url.startswith('http://') or url.startswith('https://')):
+            return jsonify({'error': 'Invalid URL format'}), 400
+        
+        # Create job ID
+        job_id = str(uuid.uuid4())
+        
+        # Initialize job status
+        jobs[job_id] = {
+            'status': 'processing',
+            'progress': 0,
+            'message': 'Starting video download...',
+            'url': url,
+            'formats': formats,
+            'output_files': [],
+            'error': None
+        }
+        
+        # Start processing in background thread
+        thread = threading.Thread(target=process_video_background, args=(job_id, url, formats))
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            'job_id': job_id,
+            'status': 'processing',
+            'message': 'Processing started'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def process_video_background(job_id, url, formats):
+    """Process video in background thread"""
+    try:
+        jobs[job_id]['progress'] = 10
+        jobs[job_id]['message'] = 'Downloading video...'
+        
+        # Download video
+        video_path = generator.download_video(url)
+        if not video_path:
+            jobs[job_id]['status'] = 'error'
+            jobs[job_id]['error'] = 'Failed to download video'
+            return
+        
+        jobs[job_id]['progress'] = 30
+        jobs[job_id]['message'] = 'Extracting transcript...'
+        
+        # Get transcript
+        transcript = generator.get_video_transcript(url)
+        
+        jobs[job_id]['progress'] = 40
+        jobs[job_id]['message'] = 'Analyzing video with AI...'
+        
+        # Find clips
+        clips = generator.find_engaging_clips_ai(video_path, transcript)
+        
+        if not clips:
+            jobs[job_id]['status'] = 'error'
+            jobs[job_id]['error'] = 'No engaging clips found'
+            return
+        
+        jobs[job_id]['progress'] = 50
+        jobs[job_id]['message'] = f'Found {len(clips)} engaging clips. Creating videos...'
+        
+        # Create clips
+        video_name = Path(video_path).stem
+        output_files = []
+        
+        for i, clip_info in enumerate(clips):
+            start = clip_info["start_time"]
+            end = clip_info["end_time"]
+            
+            for format_type in formats:
+                output_filename = f"{video_name}_clip{i+1}_{format_type}.mp4"
+                output_path = generator.output_dir / output_filename
+                
+                if generator.create_clip(video_path, start, end, str(output_path), format_type):
+                    output_files.append({
+                        'filename': output_filename,
+                        'path': str(output_path),
+                        'format': format_type,
+                        'title': clip_info.get('title', f'Clip {i+1}'),
+                        'reason': clip_info.get('reason', 'Engaging moment')
+                    })
+            
+            jobs[job_id]['progress'] = 50 + int((i + 1) / len(clips) * 40)
+            jobs[job_id]['message'] = f'Processing clip {i+1}/{len(clips)}...'
+        
+        jobs[job_id]['status'] = 'completed'
+        jobs[job_id]['progress'] = 100
+        jobs[job_id]['message'] = f'Successfully created {len(output_files)} clips!'
+        jobs[job_id]['output_files'] = output_files
+        
+    except Exception as e:
+        jobs[job_id]['status'] = 'error'
+        jobs[job_id]['error'] = str(e)
+        jobs[job_id]['message'] = f'Error: {str(e)}'
+
+@app.route('/api/status/<job_id>')
+def get_status(job_id):
+    """Get processing status"""
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    job = jobs[job_id]
+    return jsonify({
+        'status': job['status'],
+        'progress': job['progress'],
+        'message': job['message'],
+        'output_files': job.get('output_files', []),
+        'error': job.get('error')
+    })
+
+@app.route('/api/download/<job_id>/<filename>')
+def download_file(job_id, filename):
+    """Download generated clip"""
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    job = jobs[job_id]
+    if job['status'] != 'completed':
+        return jsonify({'error': 'Job not completed'}), 400
+    
+    # Find the file
+    for file_info in job['output_files']:
+        if file_info['filename'] == filename:
+            file_path = Path(file_info['path'])
+            if file_path.exists():
+                return send_file(
+                    str(file_path),
+                    as_attachment=True,
+                    download_name=filename
+                )
+    
+    return jsonify({'error': 'File not found'}), 404
+
+@app.route('/api/jobs')
+def list_jobs():
+    """List all jobs"""
+    return jsonify({
+        'jobs': {job_id: {
+            'status': job['status'],
+            'progress': job['progress'],
+            'message': job['message'],
+            'url': job.get('url', ''),
+            'created_at': job.get('created_at', time.time())
+        } for job_id, job in jobs.items()}
+    })
+
+if __name__ == '__main__':
+    print("=" * 60)
+    print("🎬 AI Clip Generator - Web Interface")
+    print("=" * 60)
+    print("Starting server...")
+    print("Access the application at: http://localhost:5000")
+    print("Or on your local network at: http://0.0.0.0:5000")
+    print("=" * 60)
+    
+    # Run on all interfaces (0.0.0.0) to allow network access
+    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
+
