@@ -293,6 +293,70 @@ def list_jobs():
         } for job_id, job in jobs.items()}
     })
 
+# Clip Library API Endpoints
+@app.route('/api/library/clips')
+def get_library_clips():
+    """Get clips from library with optional filters"""
+    format_type = request.args.get('format')
+    search = request.args.get('search')
+    min_score = request.args.get('min_score', type=float)
+    limit = request.args.get('limit', 50, type=int)
+    offset = request.args.get('offset', 0, type=int)
+    
+    clips = library.get_clips(
+        limit=limit,
+        offset=offset,
+        format_type=format_type,
+        search=search,
+        min_score=min_score
+    )
+    
+    return jsonify({
+        'clips': clips,
+        'count': len(clips),
+        'limit': limit,
+        'offset': offset
+    })
+
+@app.route('/api/library/clip/<int:clip_id>')
+def get_library_clip(clip_id):
+    """Get a specific clip from library"""
+    clip = library.get_clip_by_id(clip_id)
+    if clip:
+        library.increment_views(clip_id)
+        return jsonify(clip)
+    return jsonify({'error': 'Clip not found'}), 404
+
+@app.route('/api/library/statistics')
+def get_library_stats():
+    """Get library statistics"""
+    stats = library.get_statistics()
+    return jsonify(stats)
+
+@app.route('/api/library/clip/<int:clip_id>/download')
+def download_library_clip(clip_id):
+    """Download a clip from library"""
+    clip = library.get_clip_by_id(clip_id)
+    if not clip:
+        return jsonify({'error': 'Clip not found'}), 404
+    
+    file_path = Path(clip['clip_path'])
+    if file_path.exists():
+        library.increment_downloads(clip_id)
+        return send_file(
+            str(file_path),
+            as_attachment=True,
+            download_name=clip['clip_filename']
+        )
+    return jsonify({'error': 'File not found'}), 404
+
+@app.route('/api/library/clip/<int:clip_id>', methods=['DELETE'])
+def delete_library_clip(clip_id):
+    """Delete a clip from library"""
+    if library.delete_clip(clip_id):
+        return jsonify({'message': 'Clip deleted successfully'})
+    return jsonify({'error': 'Clip not found'}), 404
+
 if __name__ == '__main__':
     print("=" * 60)
     print("🎬 AI Clip Generator - Web Interface")
