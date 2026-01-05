@@ -117,12 +117,23 @@ function showResults(outputFiles) {
         
         const formatEmoji = file.format === 'tiktok' ? '📱' : '🎯';
         const formatName = file.format === 'tiktok' ? 'TikTok' : 'YouTube Shorts';
+        const engagementScore = file.engagement_score || 0;
+        const scoreStars = '⭐'.repeat(Math.min(5, Math.floor(engagementScore / 2)));
+        
+        // Thumbnail image
+        const thumbnailUrl = file.thumbnail ? `/api/thumbnail/${currentJobId}/${file.filename}` : '';
         
         clipItem.innerHTML = `
+            ${thumbnailUrl ? `
+            <div class="clip-thumbnail">
+                <img src="${thumbnailUrl}" alt="Clip thumbnail" onerror="this.style.display='none'">
+            </div>
+            ` : ''}
             <div class="clip-info">
                 <div class="clip-title">${formatEmoji} ${file.title || `Clip ${index + 1}`}</div>
                 <div class="clip-details">Format: ${formatName} • ${file.filename}</div>
                 ${file.reason ? `<div class="clip-reason">${file.reason}</div>` : ''}
+                ${engagementScore > 0 ? `<div class="clip-score">Viral Score: ${scoreStars} (${engagementScore}/10)</div>` : ''}
             </div>
             <div class="clip-actions">
                 <a href="/api/download/${currentJobId}/${file.filename}" class="btn-download" download>

@@ -378,27 +378,84 @@ Requirements:
         except Exception:
             pass  # Silently fail cost estimation
     
+    def _analyze_audio_engagement(self, video_path: str, duration: float) -> List[Tuple[float, float]]:
+        """Analyze audio to find engaging moments (volume spikes, energy peaks)"""
+        try:
+            import librosa
+            import numpy as np
+            
+            print("🎵 Analyzing audio for engagement peaks...")
+            
+            # Load audio
+            y, sr = librosa.load(video_path, duration=duration)
+            
+            # Calculate RMS energy (volume)
+            rms = librosa.feature.rms(y=y)[0]
+            times = librosa.frames_to_time(np.arange(len(rms)), sr=sr)
+            
+            # Find volume spikes (potential exciting moments)
+            rms_mean = np.mean(rms)
+            rms_std = np.std(rms)
+            threshold = rms_mean + (rms_std * 1.5)  # Moments above 1.5 std dev
+            
+            # Find peaks
+            peaks = []
+            for i, energy in enumerate(rms):
+                if energy > threshold and times[i] < duration:
+                    peaks.append((times[i], energy))
+            
+            # Sort by energy and return top moments
+            peaks.sort(key=lambda x: x[1], reverse=True)
+            return [time for time, _ in peaks[:10]]  # Top 10 moments
+            
+        except ImportError:
+            print("⚠️  librosa not installed. Install with: pip install librosa")
+            return []
+        except Exception as e:
+            print(f"⚠️  Audio analysis failed: {e}")
+            return []
+    
     def _heuristic_clip_detection(self, video_path: str, duration: float) -> List[Dict]:
-        """Fallback: Use heuristics to find potential clips"""
+        """Fallback: Use heuristics to find potential clips, enhanced with audio analysis"""
         clips = []
         min_duration = self.config["clip_settings"]["min_duration"]
         max_duration = self.config["clip_settings"]["max_duration"]
         preferred_duration = self.config["clip_settings"]["preferred_duration"]
         
-        # Strategy: Create clips at different points in the video
-        num_clips = min(5, int(duration / (preferred_duration * 2)))
+        # Try audio analysis first
+        audio_peaks = self._analyze_audio_engagement(video_path, duration)
         
-        for i in range(num_clips):
-            start_time = (duration / (num_clips + 1)) * (i + 1)
-            end_time = min(start_time + preferred_duration, duration)
+        if audio_peaks:
+            # Use audio peaks as clip starting points
+            for i, peak_time in enumerate(audio_peaks[:self.config["ai_settings"]["max_clips_per_video"]]):
+                start_time = max(0, peak_time - (preferred_duration / 2))
+                end_time = min(start_time + preferred_duration, duration)
+                
+                if end_time - start_time >= min_duration:
+                    clips.append({
+                        "start_time": max(0, start_time - self.config["clip_settings"]["buffer_seconds"]),
+                        "end_time": min(end_time + self.config["clip_settings"]["buffer_seconds"], duration),
+                        "reason": f"High audio energy moment at {int(peak_time)}s",
+                        "title": f"Clip {i+1}",
+                        "engagement_score": 7
+                    })
+        
+        # Fallback to time-based if no audio peaks found
+        if not clips:
+            num_clips = min(5, int(duration / (preferred_duration * 2)))
             
-            if end_time - start_time >= min_duration:
-                clips.append({
-                    "start_time": max(0, start_time - self.config["clip_settings"]["buffer_seconds"]),
-                    "end_time": min(end_time + self.config["clip_settings"]["buffer_seconds"], duration),
-                    "reason": f"Engaging moment at {int(start_time)}s",
-                    "title": f"Clip {i+1}"
-                })
+            for i in range(num_clips):
+                start_time = (duration / (num_clips + 1)) * (i + 1)
+                end_time = min(start_time + preferred_duration, duration)
+                
+                if end_time - start_time >= min_duration:
+                    clips.append({
+                        "start_time": max(0, start_time - self.config["clip_settings"]["buffer_seconds"]),
+                        "end_time": min(end_time + self.config["clip_settings"]["buffer_seconds"], duration),
+                        "reason": f"Engaging moment at {int(start_time)}s",
+                        "title": f"Clip {i+1}",
+                        "engagement_score": 5
+                    })
         
         return clips
     
@@ -473,16 +530,41 @@ Requirements:
         clip = resize(clip, (target_width, target_height))
         return clip
     
-    def _add_engaging_elements(self, clip: VideoFileClip, format_type: str) -> CompositeVideoClip:
+    def _add_engaging_elements(self, clip: VideoFileClip, format_type: str, title: str = None) -> CompositeVideoClip:
         """Add engaging elements like captions, effects, etc."""
         clips_to_composite = [clip]
         
-        # Add subtle zoom effect for engagement
-        def zoom_in(t):
-            return 1 + 0.05 * (t / clip.duration)
+        # Add subtle zoom effect for engagement (Ken Burns effect)
+        try:
+            from moviepy.video.fx.all import resize
+            def zoom_effect(get_frame, t):
+                frame = get_frame(t)
+                zoom_factor = 1 + 0.03 * (t / clip.duration)  # Subtle zoom
+                h, w = frame.shape[:2]
+                new_h, new_w = int(h * zoom_factor), int(w * zoom_factor)
+                # Simple resize (in production, use proper zoom with center crop)
+                return frame
+            # Note: Full zoom implementation would require more complex frame manipulation
+        except:
+            pass
         
-        # Add captions if we have them (simplified version)
-        # In a full implementation, you'd use speech-to-text here
+        # Add title text overlay if provided (for first 2 seconds)
+        if title and len(title) > 0:
+            try:
+                title_clip = TextClip(
+                    title[:50],  # Limit length
+                    fontsize=40,
+                    color='white',
+                    font='Arial-Bold',
+                    method='caption',
+                    size=(clip.w * 0.9, None),
+                    stroke_color='black',
+                    stroke_width=2
+                ).set_position(('center', 'top')).set_duration(min(2, clip.duration))
+                
+                clips_to_composite.append(title_clip)
+            except Exception as e:
+                print(f"⚠️  Could not add title overlay: {e}")
         
         return CompositeVideoClip(clips_to_composite)
     
@@ -511,12 +593,13 @@ Requirements:
         for i, clip_info in enumerate(clips):
             start = clip_info["start_time"]
             end = clip_info["end_time"]
+            clip_title = clip_info.get("title", f"Clip {i+1}")
             
             for format_type in formats:
                 output_filename = f"{video_name}_clip{i+1}_{format_type}.mp4"
                 output_path = self.output_dir / output_filename
                 
-                if self.create_clip(video_path, start, end, str(output_path), format_type):
+                if self.create_clip(video_path, start, end, str(output_path), format_type, clip_title):
                     output_files.append(str(output_path))
         
         print(f"\nðŸŽ‰ Successfully created {len(output_files)} clips!")

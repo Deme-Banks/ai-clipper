@@ -117,13 +117,17 @@ def process_video_background(job_id, url, formats):
                 output_filename = f"{video_name}_clip{i+1}_{format_type}.mp4"
                 output_path = generator.output_dir / output_filename
                 
-                if generator.create_clip(video_path, start, end, str(output_path), format_type):
+                clip_title = clip_info.get('title', f'Clip {i+1}')
+                if generator.create_clip(video_path, start, end, str(output_path), format_type, clip_title):
+                    thumbnail_path = generator.output_dir / f"{Path(output_path).stem}.jpg"
                     output_files.append({
                         'filename': output_filename,
                         'path': str(output_path),
                         'format': format_type,
-                        'title': clip_info.get('title', f'Clip {i+1}'),
-                        'reason': clip_info.get('reason', 'Engaging moment')
+                        'title': clip_title,
+                        'reason': clip_info.get('reason', 'Engaging moment'),
+                        'thumbnail': str(thumbnail_path) if thumbnail_path.exists() else None,
+                        'engagement_score': clip_info.get('engagement_score', 7)
                     })
             
             jobs[job_id]['progress'] = 50 + int((i + 1) / len(clips) * 40)
@@ -176,6 +180,23 @@ def download_file(job_id, filename):
                 )
     
     return jsonify({'error': 'File not found'}), 404
+
+@app.route('/api/thumbnail/<job_id>/<filename>')
+def get_thumbnail(job_id, filename):
+    """Get thumbnail for a clip"""
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    job = jobs[job_id]
+    
+    # Find the file and its thumbnail
+    for file_info in job.get('output_files', []):
+        if file_info['filename'] == filename and file_info.get('thumbnail'):
+            thumb_path = Path(file_info['thumbnail'])
+            if thumb_path.exists():
+                return send_file(str(thumb_path), mimetype='image/jpeg')
+    
+    return jsonify({'error': 'Thumbnail not found'}), 404
 
 @app.route('/api/jobs')
 def list_jobs():
