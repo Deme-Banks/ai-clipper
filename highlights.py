@@ -194,9 +194,19 @@ def rank_highlights(cues, duration, complete, num_clips=5, min_duration=15, max_
             max_duration,
             preferred,
         )
-        raw = complete(system, user)
-        parsed = parse_json_object(raw)
-        found.extend(sanitize_highlights(parsed.get("highlights"), duration, min_duration, max_duration))
+        extra = ""
+        for attempt in range(2):
+            try:
+                raw = complete(system, user + extra)
+                parsed = parse_json_object(raw)
+                batch = sanitize_highlights(parsed.get("highlights"), duration, min_duration, max_duration)
+                if batch:
+                    found.extend(batch)
+                    break
+                extra = "\nReply with JSON only. No markdown."
+            except Exception as error:
+                print(f"[highlights] attempt {attempt + 1} failed: {error}")
+                extra = "\nReply with JSON only. No markdown."
 
     ranked = dedupe_highlights(found)
     ranked.sort(key=lambda item: item["score"], reverse=True)

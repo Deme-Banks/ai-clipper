@@ -220,8 +220,11 @@ def process_video_background(job_id, url, formats, framing='track', burn_caption
                     'format_type': format_type,
                     'clip_title': clip_title,
                     'output_filename': output_filename,
-                    'clip_info': clip_info
+                    'clip_info': clip_info,
+                    'caption_cues': caption_cues,
                 })
+        
+        section_files = generator.localize_tasks(url, clip_tasks, caption_cues) if clip_media else []
         
         # Process clips with limited parallelism (max 2-3 at a time to avoid overwhelming system)
         max_workers = min(3, len(clip_tasks))
@@ -242,7 +245,7 @@ def process_video_background(job_id, url, formats, framing='track', burn_caption
                     task['output_path'], task['format_type'], task['clip_title'],
                     framing=framing,
                     hook=task['clip_info'].get('hook') or task['clip_title'],
-                    caption_cues=caption_cues,
+                    caption_cues=task.get('caption_cues', caption_cues),
                     burn_captions=burn_captions,
                     media=task.get('media'),
                 ):
@@ -361,11 +364,12 @@ def process_video_background(job_id, url, formats, framing='track', burn_caption
             'output_count': 0
         })
     finally:
-        if live_path and os.path.exists(live_path):
-            try:
-                os.remove(live_path)
-            except OSError:
-                pass
+        for leftover in [live_path, *locals().get('section_files', [])]:
+            if leftover and os.path.exists(leftover):
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
 
 @app.route('/api/status/<job_id>')
 def get_status(job_id):

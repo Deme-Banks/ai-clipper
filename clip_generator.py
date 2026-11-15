@@ -288,6 +288,54 @@ class ClipGenerator:
         self.media = media
         return media
 
+    def fetch_section(self, url: str, start: float, end: float) -> Optional[str]:
+        """Download one clip range with yt-dlp. The rest of the video stays on the site."""
+        import tempfile
+        from sources import download_section
+
+        handle = tempfile.NamedTemporaryFile(suffix=".mp4", prefix="section_", delete=False)
+        path = handle.name
+        handle.close()
+        saved = download_section(url, start, end, path)
+        if saved and os.path.exists(saved) and os.path.getsize(saved) > 0:
+            print(f"[OK] Fetched {end - start:.0f}s section")
+            return saved
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return None
+
+    def localize_tasks(self, url: str, tasks: List[Dict], caption_cues: List[Dict]) -> List[str]:
+        """Turn each remote time range into a local file before reframing.
+
+        The same range is fetched once even when it is rendered for two formats.
+        Returns temp files the caller must delete.
+        """
+        fetched = {}
+        temps = []
+        for task in tasks:
+            if not task.get("media"):
+                task["caption_cues"] = caption_cues
+                continue
+            key = (round(float(task["start"]), 2), round(float(task["end"]), 2))
+            if key not in fetched:
+                fetched[key] = self.fetch_section(url, key[0], key[1])
+            section = fetched[key]
+            if not section:
+                task["caption_cues"] = caption_cues
+                continue
+            if section not in temps:
+                temps.append(section)
+            length = max(0.4, key[1] - key[0])
+            task["video_path"] = section
+            task["start"] = 0
+            task["end"] = length
+            task["media"] = None
+            task["caption_cues"] = self._cues_for_range(caption_cues, key[0], key[1])
+        return temps
+
     def capture_live_window(self, media: Dict) -> Optional[str]:
         """Record only the bounded live window. ffmpeg is always stopped with -t."""
         import subprocess
@@ -350,7 +398,8 @@ class ClipGenerator:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
 
-                tracks = (info.get('subtitles') or {}).get('en') or (info.get('automatic_captions') or {}).get('en') or []
+                from sources import pick_subtitle_tracks
+                tracks = pick_subtitle_tracks(info)
                 if not tracks:
                     return None
                 track = next((t for t in tracks if t.get('ext') == 'json3'), tracks[0])
@@ -746,23 +795,32 @@ class ClipGenerator:
                         "engagement_score": 7
                     })
         
-        # Fallback to time-based if no audio peaks found
-        if not clips:
-            num_clips = min(5, int(duration / (preferred_duration * 2)))
-            
-            for i in range(num_clips):
-                start_time = (duration / (num_clips + 1)) * (i + 1)
-                end_time = min(start_time + preferred_duration, duration)
-                
-                if end_time - start_time >= min_duration:
-                    clips.append({
-                        "start_time": max(0, start_time - self.config["clip_settings"]["buffer_seconds"]),
-                        "end_time": min(end_time + self.config["clip_settings"]["buffer_seconds"], duration),
-                        "reason": f"Engaging moment at {int(start_time)}s",
-                        "title": f"Clip {i+1}",
-                        "hook": "Don't skip this",
-                        "engagement_score": 5
-                    })
+        # Fallback to time-based if no audio peaks found.
+        # A short video still becomes one clip. The old formula returned nothing under a minute.
+        if not clips and duration >= 3:
+            if duration <= min_duration:
+                windows = [(0, duration)]
+            else:
+                length = min(max_duration, preferred_duration, duration)
+                count = min(
+                    self.config["ai_settings"]["max_clips_per_video"],
+                    max(1, int(duration // (length + 5))),
+                )
+                windows = []
+                for i in range(count):
+                    start_time = (duration - length) * (i / max(1, count - 1)) if count > 1 else 0
+                    end_time = min(start_time + length, duration)
+                    if end_time - start_time >= min(min_duration, duration):
+                        windows.append((start_time, end_time))
+            for i, (start_time, end_time) in enumerate(windows):
+                clips.append({
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "reason": f"Section at {int(start_time)}s",
+                    "title": f"Clip {i+1}",
+                    "hook": "Don't skip this",
+                    "engagement_score": 5
+                })
         
         return clips
     
@@ -1194,21 +1252,38 @@ class ClipGenerator:
 
             output_files = []
             video_name = self.clip_stem(media)
+            tasks = []
             for i, clip_info in enumerate(clips):
-                start = clip_info["start_time"]
-                end = clip_info["end_time"]
-                clip_title = clip_info.get("title", f"Clip {i+1}")
                 for format_type in formats:
-                    output_filename = f"{video_name}_clip{i+1}_{format_type}.mp4"
-                    output_path = self.output_dir / output_filename
+                    tasks.append({
+                        "video_path": source,
+                        "media": clip_media,
+                        "start": clip_info["start_time"],
+                        "end": clip_info["end_time"],
+                        "output_path": str(self.output_dir / f"{video_name}_clip{i+1}_{format_type}.mp4"),
+                        "format_type": format_type,
+                        "clip_title": clip_info.get("title", f"Clip {i+1}"),
+                        "hook": clip_info.get("hook") or clip_info.get("title"),
+                    })
+            section_files = self.localize_tasks(url, tasks, self.caption_cues) if clip_media else []
+            try:
+                for task in tasks:
                     if self.create_clip(
-                        source, start, end, str(output_path), format_type, clip_title,
+                        task["video_path"], task["start"], task["end"], task["output_path"],
+                        task["format_type"], task["clip_title"],
                         framing=self.config.get("framing", {}).get("mode", "track"),
-                        hook=clip_info.get("hook") or clip_title,
-                        caption_cues=self.caption_cues,
-                        media=clip_media,
+                        hook=task["hook"],
+                        caption_cues=task.get("caption_cues", self.caption_cues),
+                        media=task.get("media"),
                     ):
-                        output_files.append(str(output_path))
+                        output_files.append(task["output_path"])
+            finally:
+                for leftover in section_files:
+                    if leftover and os.path.exists(leftover):
+                        try:
+                            os.remove(leftover)
+                        except OSError:
+                            pass
             print(f"\nSuccessfully created {len(output_files)} clips!")
             return output_files
         finally:

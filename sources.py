@@ -80,7 +80,13 @@ def _ydl_options():
         from framing import ffmpeg_exe
         ffmpeg = ffmpeg_exe()
         if ffmpeg:
-            options["ffmpeg_location"] = str(Path(ffmpeg).parent)
+            # Pass the executable. imageio names it ffmpeg-win-x86_64-*.exe,
+            # so a directory search for "ffmpeg.exe" misses it.
+            # yt-dlp's partial-download check ignores the option unless this
+            # context value is set. The Python API does not set it for you.
+            options["ffmpeg_location"] = str(ffmpeg)
+            from yt_dlp.postprocessor.ffmpeg import FFmpegPostProcessor
+            FFmpegPostProcessor._ffmpeg_location.set(str(ffmpeg))
     except Exception:
         pass
     return options
@@ -102,6 +108,72 @@ def _stream_urls(info):
     if info.get("url"):
         return info["url"], None, info
     return None, None, info
+
+
+def pick_subtitle_tracks(info):
+    """English captions when they exist, otherwise the first real track."""
+    manual = info.get("subtitles") or {}
+    automatic = info.get("automatic_captions") or {}
+    for lang in ("en", "en-US", "en-GB", "en-orig"):
+        if manual.get(lang):
+            return manual[lang]
+        if automatic.get(lang):
+            return automatic[lang]
+    for bucket in (manual, automatic):
+        for lang, tracks in bucket.items():
+            if tracks and not str(lang).startswith("live"):
+                return tracks
+    return []
+
+
+def download_section(url, start, end, dest):
+    """Ask yt-dlp for one time range. It handles YouTube and Twitch; ffmpeg does not.
+
+    The full video is not saved. Returns the local mp4 path, or None.
+    """
+    start = max(0.0, float(start))
+    end = float(end)
+    if end - start < 0.4:
+        return None
+    import yt_dlp
+    from yt_dlp.utils import download_range_func
+
+    target = Path(dest)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    options = _ydl_options()
+    options.update({
+        "skip_download": False,
+        "quiet": True,
+        "no_warnings": True,
+        "format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
+        "merge_output_format": "mp4",
+        "outtmpl": str(target.with_suffix("")) + ".%(ext)s",
+        "download_ranges": download_range_func(None, [(start, end)]),
+        "force_keyframes_at_cuts": True,
+        "retries": 3,
+        "fragment_retries": 3,
+    })
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except Exception as error:
+        print(f"[WARNING] Could not fetch {start:.0f}s-{end:.0f}s: {error}")
+        return None
+    downloads = (info or {}).get("requested_downloads") or []
+    path = downloads[0].get("filepath") if downloads else None
+    if path and os_path_ok(path):
+        return path
+    matches = list(target.parent.glob(target.stem + ".*"))
+    matches = [item for item in matches if item.suffix.lower() in {".mp4", ".mkv", ".webm"}]
+    return str(matches[0]) if matches else None
+
+
+def os_path_ok(path):
+    from os.path import exists, getsize
+    try:
+        return exists(path) and getsize(path) > 0
+    except OSError:
+        return False
 
 
 def resolve_media(url, live_seconds=None):

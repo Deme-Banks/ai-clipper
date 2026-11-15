@@ -106,7 +106,7 @@ Clips land in `output/`:
 - `video_title_clip1_tiktok.mp4`
 - `video_title_clip1_youtube_shorts.mp4`
 
-Only the finished clips are stored. The source video is not saved in `downloads/` or `cache/`. A stream URL from YouTube or Twitch is signed and expires, so clips are cut in the same session that opened the link.
+Only the finished clips are stored. The source video is not saved. yt-dlp fetches each chosen range itself, so a temporary YouTube or Twitch link is not handed to ffmpeg.
 
 ## Configuration
 
@@ -129,11 +129,11 @@ Output size is 1080x1920 at 30 fps for both TikTok and YouTube Shorts.
 
 ## How a clip is made
 
-1. Resolve a direct stream URL with yt-dlp. Nothing is written for the source.
+1. Open the link with yt-dlp. Nothing is written for the source yet.
 2. Load YouTube captions without downloading video. A live URL instead records a bounded window with ffmpeg `-t` (the newest DVR minutes when the stream can be seeked, otherwise the live edge).
 3. Classify the video and rank moments. Videos longer than 30 minutes are ranked in 20-minute windows that overlap by one minute.
 4. Drop a clip when more than half of it overlaps a higher-scoring clip.
-5. ffmpeg reads the stream with `-ss` and `-t`, so only that range is transferred, then reframes it to 9:16 and burns the hook and captions. If that range has no captions, only that short extract is transcribed.
+5. yt-dlp downloads only that time range, then ffmpeg reframes the local piece to 9:16 and burns the hook and captions. If that fails, ffmpeg tries the stream URL once. A range with no captions is transcribed from that short piece.
 
 ## Troubleshooting
 
@@ -145,7 +145,7 @@ Output size is 1080x1920 at 30 fps for both TikTok and YouTube Shorts.
 
 **The model request fails.** Check `OPENAI_API_KEY`, billing, or that Ollama is running.
 
-**The link will not open.** Confirm it plays in a browser. If cutting a VOD fails after the tab has been open a long time, start again so the signed stream URL is fresh. A live recording stops after the chosen window even if the broadcast continues.
+**The link will not open.** Confirm it plays in a browser. A live recording stops after the chosen window even if the broadcast continues. If a range fails, the app tries the direct stream once before giving up.
 
 ## License
 

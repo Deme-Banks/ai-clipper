@@ -1,6 +1,6 @@
 import unittest
 
-from sources import interpret_cli_window, live_capture_plan, video_source
+from sources import interpret_cli_window, live_capture_plan, pick_subtitle_tracks, video_source
 
 
 class VideoSourceTests(unittest.TestCase):
@@ -46,6 +46,13 @@ class VideoSourceTests(unittest.TestCase):
         self.assertEqual(interpret_cli_window("180"), 180)
         self.assertEqual(interpret_cli_window("20m"), 600)
         self.assertEqual(interpret_cli_window(None), 180)
+
+    def test_english_captions_are_preferred(self):
+        info = {
+            "subtitles": {"es": [{"ext": "vtt"}]},
+            "automatic_captions": {"en": [{"ext": "json3"}], "fr": [{"ext": "vtt"}]},
+        }
+        self.assertEqual(pick_subtitle_tracks(info)[0]["ext"], "json3")
 
 
 if __name__ == "__main__":

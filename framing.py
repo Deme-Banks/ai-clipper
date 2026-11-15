@@ -280,6 +280,8 @@ def dedupe_sendcmd(xs, fps, crop_w, frame_w):
 def stream_input(url, headers=None, start=None, duration=None):
     """ffmpeg input args. -ss/-t before -i so a remote URL only transfers that range."""
     args = []
+    if str(url).startswith("http"):
+        args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
     if headers:
         blob = "".join(f"{key}: {value}\r\n" for key, value in headers.items() if value)
         if blob:
