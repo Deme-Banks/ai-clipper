@@ -1,258 +1,144 @@
-﻿# 🎬 AI Clip Generator - Viral Content Creator
+﻿# AI Clip Generator
 
-Automatically transform Twitch and YouTube videos into engaging TikTok Reels and YouTube Shorts! This AI-powered tool finds the most viral-worthy moments and formats them perfectly for maximum engagement.
+Turn a YouTube or Twitch video into vertical TikTok and YouTube Shorts clips. The app downloads the video, ranks the moments most likely to hold a viewer, reframes each one to 9:16, and burns in a hook line plus captions.
 
-## ✨ Features
+## Features
 
-- 🎥 **Auto-Download**: Supports Twitch and YouTube URLs
-- 🤖 **Viral moment ranking**: Scores hooks, reactions, opinions, reveals, and story payoffs, including on videos longer than 30 minutes. Uses OpenAI or a local model such as Ollama. Videos without captions can be transcribed with faster-whisper.
-- 📱 **Vertical reframing**: Follows a face, stacks two people, or keeps the full frame on a blurred background
-- 💬 **Burned-in captions and hook text**: Uses the video's own subtitles and a short on-screen hook
-- 🎯 **YouTube Shorts Ready**: Also formats for YouTube Shorts
-- ⚡ **Smart Editing**: Auto-crops, speeds up, and optimizes clips
-- 🚀 **Viral-Focused**: Designed to help your content blow up!
+- **YouTube and Twitch download**, with a local cache so the same URL is not fetched twice
+- **Viral ranking**: each clip gets a score out of 100, a hook line, and a one-sentence reason. The ranker looks for hooks, emotional peaks, strong opinions, reveals, conflict, quotable lines, story payoffs, and practical tips
+- **Long videos**: anything over 30 minutes is split into overlapping chunks so the later half is still considered. Overlapping candidates are collapsed by score
+- **Vertical framing**
+  - **Auto**: follow one face, stack a real two-shot, or keep the full frame on a blurred background
+  - **Smart crop**: follow the largest face with a slow camera
+  - **Split**: stack two people when both are in frame
+  - **Blur**: keep the whole picture over a darkened background
+  - A video that is already vertical is scaled, not cropped apart
+- **Captions and hook text** burned into the clip. Captions come from the video's own subtitles. If there are none, a local Whisper transcript is used when one is installed
+- **OpenAI or a local model** (Ollama, LM Studio, or any OpenAI-compatible server) for ranking. With no model, audio energy is used instead
+- **Web UI** for progress, preview, download, a clip library, compilation, and a light/dark theme
 
-## 📋 Prerequisites
+## Requirements
 
-- **Python 3.8 or higher** - [Download Python](https://www.python.org/downloads/)
-- **FFmpeg** - Required for video processing
-- **OpenAI API Key** (Optional) - For enhanced AI clip detection
+- Python 3.10 or newer
+- FFmpeg on your PATH, or the copy installed with `imageio-ffmpeg` (included in `requirements.txt`)
+- An OpenAI API key **or** a local model, if you want ranked highlights instead of audio-based guesses
 
-## 🛠️ Installation
+Face tracking needs OpenCV, which is in `requirements.txt`. Local transcription of videos that have no captions needs one of:
 
-### Step 1: Install FFmpeg
-
-**Windows:**
-```powershell
-winget install --id=Gyan.FFmpeg
-```
-
-Or download from [FFmpeg Official Website](https://ffmpeg.org/download.html)
-
-**Mac:**
 ```bash
-brew install ffmpeg
+pip install faster-whisper
 ```
 
-**Linux:**
-```bash
-sudo apt-get update
-sudo apt-get install ffmpeg
-```
+or the `openai-whisper` package already listed in `requirements.txt`.
 
-### Step 2: Clone the Repository
+## Install
 
 ```bash
 git clone https://github.com/Deme-Banks/ai-clipper.git
 cd ai-clipper
-```
-
-### Step 3: Install Python Dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
-### Step 4: (Optional) Configure OpenAI API Key
+Copy `.env.example` to `.env`.
 
-For enhanced AI-powered clip detection:
+Use OpenAI:
 
-1. Get an API key from [OpenAI Platform](https://platform.openai.com/)
-2. Create a `.env` file in the project root:
 ```env
 OPENAI_API_KEY=your_api_key_here
 ```
 
-> **Note:** The tool works without OpenAI, but AI detection provides significantly better clip selection by analyzing transcripts and identifying engaging moments.
+Or point at a local server. If `LLM_BASE_URL` is set, it is used instead of OpenAI. With no key and no URL, the app uses Ollama at `http://127.0.0.1:11434` when that port is open.
 
-## 🚀 Usage
+```env
+LLM_BASE_URL=http://127.0.0.1:11434/v1
+LLM_MODEL=llama3.2
+LLM_API_KEY=ollama
+```
 
-### 🌐 Web Interface (Recommended)
+Set the OpenAI model and the local model name in `config.json` under `ai_settings` (`model` and `local_model`).
 
-The easiest way to use the AI Clip Generator is through the web interface:
+## Web app
 
-#### Quick Start
+Windows: double-click `start.bat`.
 
-**Windows:** Double-click `start.bat` - That's it! 🚀
+Anywhere else:
 
-**Command Line:**
 ```bash
 python app.py
 ```
 
-#### Access the Web Interface
+Open http://localhost:5000.
 
-Once the server starts, open your browser:
+1. Paste a YouTube or Twitch URL, or upload a file.
+2. Choose a framing mode. Auto is the default.
+3. Leave captions on to burn in the hook and subtitles.
+4. Pick TikTok, YouTube Shorts, or both.
+5. Generate, then preview or download the clips. Each card shows the viral score and why that moment was picked.
 
-- **Local access:** http://localhost:5000
-- **Network access:** http://YOUR_IP:5000 (accessible from other devices on your network)
+## Command line
 
-The startup script will automatically show your network IP address.
+Both formats:
 
-#### Using the Interface
-
-1. Paste a YouTube or Twitch URL
-2. Select output formats (TikTok, YouTube Shorts, or both)
-3. Click "Generate Clips"
-4. Watch real-time progress updates
-5. Download your clips when ready!
-
-### 💻 Command Line Usage
-
-Create clips for both TikTok and YouTube Shorts:
 ```bash
 python clip_generator.py https://www.youtube.com/watch?v=VIDEO_ID
 ```
 
-Create only TikTok format:
+One format:
+
 ```bash
 python clip_generator.py https://www.youtube.com/watch?v=VIDEO_ID tiktok
-```
-
-Create only YouTube Shorts format:
-```bash
 python clip_generator.py https://www.youtube.com/watch?v=VIDEO_ID youtube_shorts
 ```
 
-### Examples
+The CLI uses the framing mode in `config.json` (`framing.mode`, default `auto`).
 
-**Twitch Stream:**
-```bash
-python clip_generator.py https://www.twitch.tv/videos/1234567890
-```
+## Output
 
-**YouTube Video:**
-```bash
-python clip_generator.py https://www.youtube.com/watch?v=dQw4w9WgXcQ both
-```
-
-**YouTube Shorts Only:**
-```bash
-python clip_generator.py https://www.youtube.com/watch?v=dQw4w9WgXcQ youtube_shorts
-```
-
-## 📁 Output
-
-All clips are saved in the `output/` directory with descriptive filenames:
+Clips land in `output/`:
 
 - `video_title_clip1_tiktok.mp4`
 - `video_title_clip1_youtube_shorts.mp4`
-- `video_title_clip2_tiktok.mp4`
-- etc.
 
-The tool automatically:
-- Downloads videos to the `downloads/` directory
-- Analyzes content for engaging moments
-- Creates multiple clips per video (up to 5 by default)
-- Formats clips for optimal social media engagement
+Downloads are stored in `downloads/`. Repeat URLs are served from `cache/` until they pass `cache.max_age_days`. Transcripts made locally are cached next to that as `<video>.cues.json`.
 
-## ⚙️ Configuration
+## Configuration
 
-Edit `config.json` to customize settings:
+`config.json` controls length, framing, and how many clips to keep.
 
-### Output Formats
-- **Dimensions**: Adjust width/height for TikTok and YouTube Shorts
-- **Duration**: Set maximum clip duration (default: 60 seconds)
-- **FPS**: Frame rate for output videos (default: 30)
+| Setting | Default | What it does |
+|---|---|---|
+| `clip_settings.min_duration` | 15 | Shortest clip, in seconds |
+| `clip_settings.max_duration` | 60 | Longest clip. Longer picks are sped up to fit |
+| `clip_settings.preferred_duration` | 30 | Length the ranker aims for |
+| `clip_settings.buffer_seconds` | 2 | Extra time kept before and after the moment |
+| `framing.mode` | `auto` | `auto`, `track`, `blur`, or `split` |
+| `ai_settings.model` | `gpt-4o-mini` | OpenAI model |
+| `ai_settings.local_model` | `llama3.2` | Model name on the local server |
+| `ai_settings.max_clips_per_video` | 5 | How many clips to render |
+| `captions.enabled` | true | Burn captions when cues exist |
 
-### Clip Settings
-- **min_duration**: Minimum clip length in seconds (default: 15)
-- **max_duration**: Maximum clip length in seconds (default: 60)
-- **preferred_duration**: Target clip length (default: 30)
-- **buffer_seconds**: Extra seconds before/after clips (default: 2)
+Output size is 1080x1920 at 30 fps for both TikTok and YouTube Shorts.
 
-### AI Settings
-- **model**: OpenAI model to use (default: "gpt-4o-mini" - best value!)
-  - `gpt-4o-mini`: Best value (60x cheaper than GPT-4, excellent quality) ⭐ Recommended
-  - `gpt-4o`: Premium quality, faster than GPT-4 Turbo
-  - `gpt-4-turbo`: High quality analysis
-  - `gpt-4`: Original premium model
-  - `gpt-3.5-turbo`: Budget option, still very good
-- **temperature**: AI creativity level 0-1 (default: 0.7)
-- **max_clips_per_video**: Maximum clips generated per video (default: 5)
+## How a clip is made
 
-> 💡 **Tip:** See `AI_MODELS_GUIDE.md` for detailed comparison of AI models and recommendations!
+1. Download the video, or reuse the cache.
+2. Load YouTube captions. If the video has none, transcribe it with faster-whisper or Whisper and cache the cues.
+3. Classify the video (podcast, tutorial, vlog, and so on) and rank moments. Videos longer than 30 minutes are ranked in 20-minute windows that overlap by one minute.
+4. Drop a clip when more than half of it overlaps a higher-scoring clip.
+5. Reframe to 9:16, burn the hook and captions, and write the mp4 plus a thumbnail.
 
-### Example Configuration
+## Troubleshooting
 
-```json
-{
-  "output_formats": {
-    "tiktok": {
-      "width": 1080,
-      "height": 1920,
-      "duration_max": 60,
-      "fps": 30
-    }
-  },
-  "clip_settings": {
-    "min_duration": 15,
-    "max_duration": 60,
-    "preferred_duration": 30,
-    "buffer_seconds": 2
-  },
-  "ai_settings": {
-    "model": "gpt-4",
-    "temperature": 0.7,
-    "max_clips_per_video": 5
-  }
-}
-```
+**FFmpeg was not found.** Install it and confirm `ffmpeg -version` works, or reinstall dependencies so `imageio-ffmpeg` is present. You can also set `FFMPEG_PATH` to the binary.
 
-## 🔍 How It Works
+**No faces are followed.** Install OpenCV with `pip install opencv-python-headless`. Without it, Auto uses the blurred full-frame layout on widescreen video.
 
-1. **Download**: Automatically downloads video from provided URL
-2. **Analyze**: Extracts transcript (if available) and analyzes content
-3. **Detect**: Uses AI or heuristics to find engaging moments
-4. **Format**: Crops and resizes to vertical format (9:16 aspect ratio)
-5. **Optimize**: Speeds up clips if needed, adds engaging elements
-6. **Export**: Saves ready-to-upload clips in `output/` directory
+**Clips are chosen from audio peaks.** Ranking needs captions or a transcript, plus OpenAI or a local model. Install `faster-whisper` when the source has no subtitles.
 
-## 🐛 Troubleshooting
+**The model request fails.** Check `OPENAI_API_KEY`, billing, or that Ollama is running. The app falls back to audio peaks.
 
-### FFmpeg Not Found
-- Ensure FFmpeg is installed and in your system PATH
-- Verify installation: `ffmpeg -version`
+**A download fails.** Confirm the URL plays in a browser. Some videos block downloading.
 
-### Import Errors
-- Make sure all dependencies are installed: `pip install -r requirements.txt`
-- Use a virtual environment to avoid conflicts
+## License
 
-### Video Download Fails
-- Check your internet connection
-- Verify the URL is accessible
-- Some videos may have download restrictions
-
-### OpenAI API Errors
-- Verify your API key is correct in `.env` file
-- Check your OpenAI account has credits
-- The tool will fall back to heuristic detection if AI fails
-
-## 📝 Requirements
-
-See `requirements.txt` for full list. Main dependencies:
-- `yt-dlp` - Video downloading
-- `moviepy` - Video editing
-- `openai` - AI clip detection (optional)
-- `pillow` - Image processing
-- `python-dotenv` - Environment variables
-
-## 🤝 Contributing
-
-Contributions are welcome! Feel free to:
-- Report bugs
-- Suggest features
-- Submit pull requests
-- Improve documentation
-
-## 📄 License
-
-Free to use for personal and commercial projects!
-
-## 🙏 Acknowledgments
-
-Built for content creators who want to go viral! 🚀
-
----
-
-**Made with ❤️ for the creator community**
+Free to use for personal and commercial projects.
