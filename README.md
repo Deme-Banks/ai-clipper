@@ -5,8 +5,9 @@ Automatically transform Twitch and YouTube videos into engaging TikTok Reels and
 ## ✨ Features
 
 - 🎥 **Auto-Download**: Supports Twitch and YouTube URLs
-- 🤖 **AI-Powered Clip Detection**: Finds the most engaging moments automatically using OpenAI (optional)
-- 📱 **Format Optimization**: Creates perfect vertical videos for TikTok (1080x1920)
+- 🤖 **Viral moment ranking**: Scores hooks, reactions, opinions, reveals, and story payoffs, including on videos longer than 30 minutes. Uses OpenAI or a local model such as Ollama. Videos without captions can be transcribed with faster-whisper.
+- 📱 **Vertical reframing**: Follows a face, stacks two people, or keeps the full frame on a blurred background
+- 💬 **Burned-in captions and hook text**: Uses the video's own subtitles and a short on-screen hook
 - 🎯 **YouTube Shorts Ready**: Also formats for YouTube Shorts
 - ⚡ **Smart Editing**: Auto-crops, speeds up, and optimizes clips
 - 🚀 **Viral-Focused**: Designed to help your content blow up!

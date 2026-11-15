@@ -24,8 +24,12 @@
     "preferred_duration": 30,
     "buffer_seconds": 2
   },
+  "framing": {
+    "mode": "auto"
+  },
   "ai_settings": {
     "model": "gpt-4o-mini",
+    "local_model": "llama3.2",
     "temperature": 0.7,
     "max_clips_per_video": 5
   },
@@ -41,6 +45,7 @@
   },
   "captions": {
     "enabled": true,
+    "whisper_fallback": false,
     "style": "tiktok",
     "font_size": 48,
     "font_color": "white",

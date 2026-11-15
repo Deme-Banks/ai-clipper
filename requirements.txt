@@ -11,4 +11,8 @@ flask-cors>=4.0.0
 librosa>=0.10.0
 scipy>=1.11.0
 openai-whisper>=20231117
+# Optional, faster local transcripts when a video has no captions:
+# faster-whisper>=1.0.0
+opencv-python-headless>=4.8.0
+imageio-ffmpeg>=0.5.1
 

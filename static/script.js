@@ -44,7 +44,9 @@ function initializeApp() {
             },
             body: JSON.stringify({
                 url: url,
-                formats: formats
+                formats: formats,
+                framing: document.getElementById('framingMode').value,
+                captions: document.getElementById('burnCaptions').checked
             })
         });
         
@@ -220,13 +222,19 @@ function showResults(outputFiles) {
                         <span>💾</span>
                         <span>${fileSize}</span>
                     </div>
-                    ${file.engagement_score ? `
+                    ${file.viral_score ? `
+                    <div class="clip-metadata-item">
+                        <span>⭐</span>
+                        <span>${file.viral_score}/100</span>
+                    </div>
+                    ` : file.engagement_score ? `
                     <div class="clip-metadata-item">
                         <span>⭐</span>
                         <span>${file.engagement_score}/10</span>
                     </div>
                     ` : ''}
                 </div>
+                ${file.reason ? `<p class="clip-card-subtitle">${escapeHtml(file.reason)}</p>` : ''}
                 <div class="clip-card-actions">
                     <button onclick="previewClip('${currentJobId}', '${file.filename}', '${file.title || `Clip ${index + 1}`}')" class="btn-preview" style="flex: 1; padding: 8px; font-size: 12px;">
                         🎬 Preview
@@ -245,6 +253,16 @@ function showResults(outputFiles) {
         document.getElementById('progressSection').style.display = 'none';
         updateSelectedCount();
     }, 300); // Small delay for smooth transition
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[char]));
 }
 
 function formatDuration(seconds) {

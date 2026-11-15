@@ -77,6 +77,25 @@
                             </div>
 
                             <div class="form-group">
+                                <label for="framingMode">Vertical framing</label>
+                                <select id="framingMode" name="framing">
+                                    <option value="auto" selected>Auto — face, two-shot, or blurred frame</option>
+                                    <option value="track">Smart crop — follow the face</option>
+                                    <option value="blur">Blurred background — keep the full frame</option>
+                                    <option value="split">Split — stack two people</option>
+                                </select>
+                                <small>Auto follows one face, stacks a real two-shot, and blurs the background when nobody is in frame.</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="burnCaptions" checked>
+                                    <span>Burn in captions and a hook line</span>
+                                </label>
+                                <small>Moments are ranked for hooks, reactions, opinions, and payoffs. A video with no captions is transcribed locally when faster-whisper is installed.</small>
+                            </div>
+
+                            <div class="form-group">
                                 <label>Output Formats</label>
                                 <div class="checkbox-group">
                                     <label class="checkbox-label">

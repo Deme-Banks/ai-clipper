@@ -70,26 +70,48 @@ class ClipGenerator:
         with open(config_path, 'r') as f:
             self.config = json.load(f)
         
-        # Initialize OpenAI if API key is available
+        # Cloud OpenAI, or a local OpenAI-compatible server (Ollama, LM Studio, vLLM)
         self.openai_key = os.getenv("OPENAI_API_KEY")
         self.openai_client = None
         self.openai_enabled = False
-        if self.openai_key and OPENAI_AVAILABLE:
+        self.ai_provider = None
+        self.ai_model = self.config.get("ai_settings", {}).get("model", "gpt-4o-mini")
+        self.caption_cues = []
+        llm_base = os.getenv("LLM_BASE_URL", "").strip()
+        local_model = os.getenv("LLM_MODEL") or self.config.get("ai_settings", {}).get("local_model", "llama3.2")
+
+        if not OPENAI_AVAILABLE:
+            print("[INFO] OpenAI library not installed. Install with: pip install openai")
+        elif self.openai_key and not llm_base:
             try:
                 self.openai_client = OpenAI(
                     api_key=self.openai_key,
-                    timeout=60.0,  # 60 second timeout
+                    timeout=60.0,
                     max_retries=3
                 )
                 self.openai_enabled = True
+                self.ai_provider = "openai"
                 print("[OK] OpenAI API initialized successfully")
             except Exception as e:
                 print(f"[WARNING] OpenAI initialization failed: {e}")
                 self.openai_enabled = False
-        elif not OPENAI_AVAILABLE:
-            print("[INFO] OpenAI library not installed. Install with: pip install openai")
-        elif not self.openai_key:
-            print("[INFO] OpenAI API key not found. Add OPENAI_API_KEY to .env for AI-powered clip detection")
+        elif llm_base or self._local_llm_reachable():
+            try:
+                base_url = llm_base or "http://127.0.0.1:11434/v1"
+                self.openai_client = OpenAI(
+                    base_url=base_url,
+                    api_key=os.getenv("LLM_API_KEY", "ollama"),
+                    timeout=120.0,
+                    max_retries=1
+                )
+                self.openai_enabled = True
+                self.ai_provider = "local"
+                self.ai_model = local_model
+                print(f"[OK] Local LLM ready at {base_url} ({local_model})")
+            except Exception as e:
+                print(f"[WARNING] Local LLM setup failed: {e}")
+        else:
+            print("[INFO] No AI provider. Add OPENAI_API_KEY, or run Ollama, for clip detection")
         
         # Create output directories
         self.output_dir = Path("output")
@@ -103,6 +125,19 @@ class ClipGenerator:
         self.cache_enabled = self.config.get("cache", {}).get("enabled", True)
         self.cache_max_size_gb = self.config.get("cache", {}).get("max_size_gb", 10)
         self.cache_max_age_days = self.config.get("cache", {}).get("max_age_days", 30)
+
+    def _local_llm_reachable(self) -> bool:
+        """True when something is listening on Ollama's default port."""
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.4)
+        try:
+            sock.connect(("127.0.0.1", 11434))
+            return True
+        except OSError:
+            return False
+        finally:
+            sock.close()
     
     def _get_cache_key(self, url: str) -> str:
         """Generate cache key from URL"""
@@ -260,7 +295,8 @@ class ClipGenerator:
             return None
     
     def get_video_transcript(self, url: str) -> Optional[str]:
-        """Extract transcript from video if available"""
+        """Extract a timestamped transcript and keep cues for burned-in captions."""
+        self.caption_cues = []
         try:
             ydl_opts = {
                 'writesubtitles': True,
@@ -270,27 +306,102 @@ class ClipGenerator:
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                
-                # Try to get subtitles
-                subtitles = info.get('subtitles', {}) or info.get('automatic_captions', {})
-                if 'en' in subtitles:
-                    subtitle_url = subtitles['en'][0]['url']
-                    import requests
-                    response = requests.get(subtitle_url)
-                    if response.status_code == 200:
-                        # Parse WebVTT or SRT format (simplified)
-                        text = response.text
-                        # Remove timestamps and formatting
-                        lines = text.split('\n')
-                        transcript_lines = []
-                        for line in lines:
-                            if line and not line.startswith('<') and '-->' not in line and not line.strip().isdigit():
-                                transcript_lines.append(line.strip())
-                        return ' '.join(transcript_lines)
+
+                tracks = (info.get('subtitles') or {}).get('en') or (info.get('automatic_captions') or {}).get('en') or []
+                if not tracks:
+                    return None
+                track = next((t for t in tracks if t.get('ext') == 'json3'), tracks[0])
+                import requests
+                response = requests.get(track['url'], timeout=30)
+                if response.status_code != 200:
+                    return None
+                self.caption_cues = self._parse_timed_captions(response.text)
+                if not self.caption_cues:
+                    return None
+                print(f"[OK] Loaded {len(self.caption_cues)} caption cues")
+                return self._transcript_for_ai(self.caption_cues)
         except Exception as e:
-            print(f"âš ï¸ Could not extract transcript: {e}")
-        
+            print(f"[WARNING] Could not extract transcript: {e}")
+            self.caption_cues = []
         return None
+
+    def _parse_timed_captions(self, raw: str) -> List[Dict]:
+        """Parse YouTube json3, WebVTT, or SRT into timed cues."""
+        raw = (raw or "").strip()
+        cues = []
+        if raw.startswith('{') or raw.startswith('['):
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict):
+                for event in data.get('events', []):
+                    text = ''.join(seg.get('utf8', '') for seg in (event.get('segs') or []))
+                    text = re.sub(r'\s+', ' ', text.replace('\n', ' ')).strip()
+                    if not text:
+                        continue
+                    start = event.get('tStartMs', 0) / 1000.0
+                    end = start + event.get('dDurationMs', 0) / 1000.0
+                    cues.append({'start': start, 'end': end, 'text': text})
+            return self._dedupe_cues(cues)
+
+        time_re = re.compile(
+            r'(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->\s*(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})'
+        )
+
+        def to_seconds(hours, minutes, seconds, millis):
+            millis = (millis or '0').ljust(3, '0')[:3]
+            return int(hours or 0) * 3600 + int(minutes) * 60 + int(seconds) + int(millis) / 1000.0
+
+        lines = raw.splitlines()
+        index = 0
+        while index < len(lines):
+            match = time_re.search(lines[index])
+            if not match:
+                index += 1
+                continue
+            start = to_seconds(match.group(1), match.group(2), match.group(3), match.group(4))
+            end = to_seconds(match.group(5), match.group(6), match.group(7), match.group(8))
+            index += 1
+            text_lines = []
+            while index < len(lines) and lines[index].strip():
+                text_lines.append(lines[index].strip())
+                index += 1
+            text = re.sub(r'<[^>]+>', '', ' '.join(text_lines))
+            text = re.sub(r'\s+', ' ', text).strip()
+            if text:
+                cues.append({'start': start, 'end': end, 'text': text})
+        return self._dedupe_cues(cues)
+
+    def _dedupe_cues(self, cues: List[Dict]) -> List[Dict]:
+        cleaned = []
+        for cue in cues:
+            if cleaned and cleaned[-1]['text'] == cue['text'] and abs(cleaned[-1]['start'] - cue['start']) < 0.4:
+                cleaned[-1]['end'] = max(cleaned[-1]['end'], cue['end'])
+                continue
+            cleaned.append(cue)
+        return cleaned
+
+    def _transcript_for_ai(self, cues: List[Dict], limit: int = 7000) -> str:
+        """Timestamped lines, sampled across the whole video when the transcript is long."""
+        lines = [f"[{cue['start']:.1f}-{cue['end']:.1f}] {cue['text']}" for cue in cues]
+        text = "\n".join(lines)
+        if len(text) <= limit:
+            return text
+        step = max(1, len(lines) // 90)
+        return "\n".join(lines[::step])[:limit]
+
+    def _cues_for_range(self, cues: List[Dict], start: float, end: float) -> List[Dict]:
+        ranged = []
+        for cue in cues or []:
+            if cue['end'] <= start or cue['start'] >= end:
+                continue
+            cue_start = max(cue['start'], start) - start
+            cue_end = min(cue['end'], end) - start
+            text = re.sub(r'<[^>]+>', '', cue['text']).strip()
+            if text and cue_end - cue_start >= 0.2:
+                ranged.append({'start': cue_start, 'end': cue_end, 'text': text})
+        return ranged
     
     def find_engaging_clips_ai(self, video_path: str, transcript: Optional[str] = None) -> List[Dict]:
         """Use AI to find the most engaging moments in the video"""
@@ -298,10 +409,15 @@ class ClipGenerator:
         duration = clip.duration
         clip.close()
         
+        if not self.caption_cues:
+            local_transcript = self.transcribe_video(video_path)
+            if local_transcript:
+                transcript = local_transcript
+
         # If we have OpenAI API, use it for intelligent clip detection
         if self.openai_enabled and self.openai_client:
-            if transcript:
-                print("🤖 AI analyzing video transcript for engaging moments...")
+            if transcript or self.caption_cues:
+                print("🤖 AI ranking transcript for viral moments...")
                 return self._ai_clip_detection(video_path, transcript, duration)
             else:
                 print("⚠️  No transcript available. AI detection requires transcript. Using heuristics...")
@@ -312,201 +428,143 @@ class ClipGenerator:
                 print("💡 Using heuristic detection (add OpenAI API key to .env for AI-powered clip detection)")
             return self._heuristic_clip_detection(video_path, duration)
     
-    def _ai_clip_detection(self, video_path: str, transcript: str, duration: float) -> List[Dict]:
-        """Use OpenAI to intelligently find engaging clips"""
+    def _llm_complete(self, system: str, user: str) -> str:
+        """One chat completion. Works for OpenAI and a local OpenAI-compatible server."""
+        response = self.openai_client.chat.completions.create(
+            model=self.ai_model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=self.config["ai_settings"]["temperature"],
+        )
+        self._estimate_cost(response)
+        return response.choices[0].message.content or ""
+
+    def transcribe_video(self, video_path: str) -> Optional[str]:
+        """Transcribe a file when the platform did not provide captions. Cached beside the video cache."""
+        cache_path = self.cache_dir / f"{Path(video_path).stem}.cues.json"
+        source = Path(video_path)
+        if cache_path.exists() and source.exists() and cache_path.stat().st_mtime >= source.stat().st_mtime:
+            try:
+                self.caption_cues = json.loads(cache_path.read_text(encoding="utf-8"))
+                if self.caption_cues:
+                    print(f"[OK] Reused {len(self.caption_cues)} cached transcript cues")
+                    return self._transcript_for_ai(self.caption_cues)
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        cues = self._whisper_cues(video_path)
+        if not cues:
+            return None
+        self.caption_cues = cues
         try:
-            max_retries = 3
-            retry_delay = 2
-            
-            # Truncate transcript if too long (keep it under token limits)
-            max_transcript_length = 4000  # characters
-            transcript_to_use = transcript
-            if len(transcript_to_use) > max_transcript_length:
-                transcript_to_use = transcript_to_use[:max_transcript_length] + "..."
-                print(f"📝 Transcript truncated to {max_transcript_length} characters for API efficiency")
-            
-            for attempt in range(max_retries):
-                try:
-                    # Enhanced prompt for better clip detection
-                    system_prompt = """You are an expert video editor and social media content strategist specializing in viral content. 
-Your task is to identify the most engaging, shareable moments from video transcripts that would perform well on TikTok and YouTube Shorts.
+            cache_path.write_text(json.dumps(cues), encoding="utf-8")
+        except OSError as error:
+            print(f"[WARNING] Could not cache transcript: {error}")
+        print(f"[OK] Transcribed {len(cues)} cues")
+        return self._transcript_for_ai(cues)
 
-Key principles:
-- Prioritize moments with high emotional impact (laughter, surprise, tension, excitement)
-- Look for clear narrative hooks that grab attention in the first 3 seconds
-- Identify moments with strong visual potential (even from transcript context)
-- Focus on self-contained clips that make sense without full context
-- Prefer clips with memorable quotes, reactions, or dramatic moments
-- Avoid clips that require extensive background knowledge
+    def _whisper_cues(self, video_path: str) -> List[Dict]:
+        try:
+            from faster_whisper import WhisperModel
+            print("[OK] Transcribing with faster-whisper...")
+            model = WhisperModel("base", device="cpu", compute_type="int8")
+            segments, _info = model.transcribe(video_path, vad_filter=True)
+            return [
+                {"start": segment.start, "end": segment.end, "text": segment.text.strip()}
+                for segment in segments
+                if segment.text and segment.text.strip()
+            ]
+        except ImportError:
+            pass
+        except Exception as error:
+            print(f"[WARNING] faster-whisper failed: {error}")
+            return []
 
-Return ONLY a valid JSON array. No markdown, no explanations, just JSON."""
-                    
-                    user_prompt = f"""Analyze this video transcript and identify the {self.config["ai_settings"]["max_clips_per_video"]} most engaging, viral-worthy moments.
+        try:
+            import whisper
+            print("[OK] Transcribing with Whisper...")
+            model = whisper.load_model("base")
+            result = model.transcribe(video_path)
+            return [
+                {"start": segment["start"], "end": segment["end"], "text": segment["text"].strip()}
+                for segment in result.get("segments", [])
+                if segment.get("text", "").strip()
+            ]
+        except ImportError:
+            print("[INFO] No captions on this video. Install faster-whisper to transcribe it locally.")
+            return []
+        except Exception as error:
+            print(f"[WARNING] Whisper transcription failed: {error}")
+            return []
 
-Video Information:
-- Duration: {duration:.1f} seconds
-- Target clip length: {self.config["clip_settings"]["preferred_duration"]}-{self.config["clip_settings"]["max_duration"]} seconds
-- Minimum clip length: {self.config["clip_settings"]["min_duration"]} seconds
+    def _ai_clip_detection(self, video_path: str, transcript: str, duration: float) -> List[Dict]:
+        """Rank viral moments, then drop overlaps."""
+        from highlights import rank_highlights
 
-Transcript:
-{transcript_to_use}
-
-Return a JSON array with this exact structure:
-[
-  {{
-    "start_time": <number in seconds>,
-    "end_time": <number in seconds>,
-    "reason": "<brief explanation of why this moment is engaging>",
-    "title": "<catchy, clickable title for the clip>",
-    "engagement_score": <number 1-10 indicating viral potential>
-  }}
-]
-
-Requirements:
-- Each clip must be between {self.config["clip_settings"]["min_duration"]} and {self.config["clip_settings"]["max_duration"]} seconds
-- start_time must be >= 0 and end_time must be <= {duration:.1f}
-- Focus on moments with high engagement potential
-- Ensure clips don't overlap significantly
-- Return ONLY the JSON array, no other text"""
-
-                    if attempt > 0:
-                        print(f"🔄 Retrying OpenAI request (attempt {attempt + 1}/{max_retries})...")
-                    else:
-                        print("🔄 Sending request to OpenAI...")
-                    
-                    response = self.openai_client.chat.completions.create(
-                        model=self.config["ai_settings"]["model"],
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt}
-                        ],
-                        temperature=self.config["ai_settings"]["temperature"]
-                    )
-                    
-                    # Extract and parse response
-                    content = response.choices[0].message.content.strip()
-                    
-                    # Handle different response formats
-                    if content.startswith("```"):
-                        # Remove markdown code blocks
-                        lines = content.split("\n")
-                        content = "\n".join([line for line in lines if not line.strip().startswith("```")])
-                    elif content.startswith("`"):
-                        content = content.strip("`")
-                        if content.startswith("json"):
-                            content = content[4:].strip()
-                    
-                    # Try to parse as JSON
-                    try:
-                        clips_data = json.loads(content)
-                    except json.JSONDecodeError:
-                        # Try to extract JSON from text
-                        json_match = re.search(r'\[.*\]', content, re.DOTALL)
-                        if json_match:
-                            clips_data = json.loads(json_match.group())
-                        else:
-                            raise ValueError("Could not extract JSON from response")
-                    
-                    # Handle if response is wrapped in an object
-                    if isinstance(clips_data, dict):
-                        # Look for common keys that might contain the array
-                        for key in ['clips', 'results', 'data', 'output']:
-                            if key in clips_data and isinstance(clips_data[key], list):
-                                clips_data = clips_data[key]
-                                break
-                        # If still a dict, try to convert to list
-                        if isinstance(clips_data, dict):
-                            clips_data = [clips_data]
-                    
-                    if not isinstance(clips_data, list):
-                        clips_data = [clips_data]
-                    
-                    # Validate and filter clips
-                    valid_clips = []
-                    for clip in clips_data:
-                        if "start_time" in clip and "end_time" in clip:
-                            try:
-                                start = float(clip["start_time"])
-                                end = float(clip["end_time"])
-                                clip_duration = end - start
-                                
-                                # Validate clip timing
-                                if (0 <= start < end <= duration and 
-                                    self.config["clip_settings"]["min_duration"] <= clip_duration <= self.config["clip_settings"]["max_duration"]):
-                                    
-                                    # Add buffer if configured
-                                    start = max(0, start - self.config["clip_settings"]["buffer_seconds"])
-                                    end = min(duration, end + self.config["clip_settings"]["buffer_seconds"])
-                                    
-                                    valid_clips.append({
-                                        "start_time": start,
-                                        "end_time": end,
-                                        "reason": clip.get("reason", "Engaging moment"),
-                                        "title": clip.get("title", f"Clip {len(valid_clips) + 1}"),
-                                        "engagement_score": clip.get("engagement_score", 7)
-                                    })
-                            except (ValueError, TypeError) as e:
-                                print(f"⚠️  Skipping invalid clip data: {e}")
-                                continue
-                    
-                    # Sort by engagement score if available
-                    valid_clips.sort(key=lambda x: x.get("engagement_score", 0), reverse=True)
-                    
-                    # Limit to max clips
-                    valid_clips = valid_clips[:self.config["ai_settings"]["max_clips_per_video"]]
-                    
-                    if valid_clips:
-                        print(f"✅ AI found {len(valid_clips)} engaging clips!")
-                        # Show estimated cost
-                        self._estimate_cost(response)
-                        return valid_clips
-                    else:
-                        print("⚠️  AI returned no valid clips, using heuristics...")
-                        return self._heuristic_clip_detection(video_path, duration)
-                        
-                except RateLimitError as e:
-                    wait_time = retry_delay * (2 ** attempt)
-                    if attempt < max_retries - 1:
-                        print(f"⏳ Rate limit hit. Waiting {wait_time} seconds before retry...")
-                        time.sleep(wait_time)
-                    else:
-                        print(f"❌ Rate limit exceeded after {max_retries} attempts. Using heuristics...")
-                        return self._heuristic_clip_detection(video_path, duration)
-                        
-                except (APIConnectionError, APITimeoutError) as e:
-                    wait_time = retry_delay * (2 ** attempt)
-                    if attempt < max_retries - 1:
-                        print(f"🔄 Connection error. Retrying in {wait_time} seconds...")
-                        time.sleep(wait_time)
-                    else:
-                        print(f"❌ Connection failed after {max_retries} attempts. Using heuristics...")
-                        return self._heuristic_clip_detection(video_path, duration)
-                        
-                except APIError as e:
-                    error_msg = str(e)
-                    if "insufficient_quota" in error_msg.lower() or "billing" in error_msg.lower():
-                        print(f"❌ OpenAI API billing/quota issue: {e}")
-                        print("💡 Check your OpenAI account billing and credits")
-                    else:
-                        print(f"❌ OpenAI API error: {e}")
-                    return self._heuristic_clip_detection(video_path, duration)
-                    
-                except (json.JSONDecodeError, ValueError) as e:
-                    print(f"⚠️  Failed to parse AI response: {e}")
-                    if attempt < max_retries - 1:
-                        print(f"🔄 Retrying with different approach...")
-                        time.sleep(retry_delay)
-                    else:
-                        print("❌ Could not parse AI response after retries. Using heuristics...")
-                        return self._heuristic_clip_detection(video_path, duration)
-            
-            # If all retries failed
+        cues = list(self.caption_cues)
+        if not cues and transcript:
+            cues = self._cues_from_transcript_lines(transcript)
+        if not cues:
+            print("⚠️  No timed transcript, using heuristics...")
             return self._heuristic_clip_detection(video_path, duration)
-            
-        except Exception as e:
-            print(f"âš ï¸ AI detection failed, using heuristics: {e}")
+
+        settings = self.config["clip_settings"]
+        try:
+            ranked = rank_highlights(
+                cues,
+                duration,
+                self._llm_complete,
+                num_clips=self.config["ai_settings"]["max_clips_per_video"],
+                min_duration=settings["min_duration"],
+                max_duration=settings["max_duration"],
+                preferred=settings["preferred_duration"],
+            )
+        except (RateLimitError, APIConnectionError, APITimeoutError, APIError, ValueError, json.JSONDecodeError) as error:
+            print(f"⚠️  Highlight ranking failed, using heuristics: {error}")
             return self._heuristic_clip_detection(video_path, duration)
-    
+        except Exception as error:
+            print(f"⚠️  Highlight ranking failed, using heuristics: {error}")
+            return self._heuristic_clip_detection(video_path, duration)
+
+        if not ranked:
+            print("⚠️  AI returned no valid clips, using heuristics...")
+            return self._heuristic_clip_detection(video_path, duration)
+
+        buffer_seconds = settings["buffer_seconds"]
+        clips = []
+        for item in ranked:
+            start = max(0, item["start_time"] - buffer_seconds)
+            end = min(duration, item["end_time"] + buffer_seconds)
+            score = item["score"]
+            clips.append({
+                "start_time": start,
+                "end_time": end,
+                "reason": item["virality_reason"] or "Engaging moment",
+                "title": item["title"],
+                "hook": (item["hook_sentence"] or item["title"])[:80],
+                "engagement_score": max(1, min(10, round(score / 10))),
+                "viral_score": score,
+            })
+            print(f"#{len(clips)} score={score}  {start:.1f}s -> {end:.1f}s  {item['title']}")
+        print(f"✅ Ranked {len(clips)} clips")
+        return clips
+
+    def _cues_from_transcript_lines(self, transcript: str) -> List[Dict]:
+        cues = []
+        pattern = re.compile(r"\[(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\]\s*(.*)")
+        for line in (transcript or "").splitlines():
+            match = pattern.match(line.strip())
+            if not match or not match.group(3).strip():
+                continue
+            cues.append({
+                "start": float(match.group(1)),
+                "end": float(match.group(2)),
+                "text": match.group(3).strip(),
+            })
+        return cues
+
     def _estimate_cost(self, response) -> None:
         """Estimate and display API cost"""
         try:
@@ -603,6 +661,7 @@ Requirements:
                         "end_time": min(end_time + self.config["clip_settings"]["buffer_seconds"], duration),
                         "reason": f"High audio energy moment at {int(peak_time)}s",
                         "title": f"Clip {i+1}",
+                        "hook": "Wait for this",
                         "engagement_score": 7
                     })
         
@@ -620,16 +679,50 @@ Requirements:
                         "end_time": min(end_time + self.config["clip_settings"]["buffer_seconds"], duration),
                         "reason": f"Engaging moment at {int(start_time)}s",
                         "title": f"Clip {i+1}",
+                        "hook": "Don't skip this",
                         "engagement_score": 5
                     })
         
         return clips
     
     def create_clip(self, video_path: str, start_time: float, end_time: float, 
-                   output_path: str, format_type: str = "tiktok", clip_title: str = None) -> bool:
+                   output_path: str, format_type: str = "tiktok", clip_title: str = None,
+                   framing: str = "track", hook: str = None, caption_cues: Optional[List[Dict]] = None,
+                   burn_captions: bool = True) -> bool:
         """Create a formatted clip for TikTok or YouTube Shorts"""
-        print(f"âœ‚ï¸ Creating {format_type} clip: {start_time}s - {end_time}s")
+        print(f"Creating {format_type} clip ({framing}): {start_time}s - {end_time}s")
+
+        format_config = self.config["output_formats"][format_type]
+        try:
+            from framing import render_vertical_clip, write_thumbnail
+            rendered = render_vertical_clip(
+                video_path,
+                output_path,
+                start_time,
+                end_time,
+                format_config["width"],
+                format_config["height"],
+                fps=format_config["fps"],
+                mode=framing or "auto",
+                hook=(hook or clip_title) if burn_captions else None,
+                cues=self._cues_for_range(caption_cues, start_time, end_time) if burn_captions else [],
+                burn_captions=burn_captions,
+                max_duration=format_config["duration_max"],
+            )
+            if rendered:
+                thumbnail_path = Path(output_path).with_suffix(".jpg")
+                try:
+                    write_thumbnail(output_path, thumbnail_path)
+                except Exception as thumb_error:
+                    print(f"[WARNING] Thumbnail skipped: {thumb_error}")
+                print(f"Created: {output_path}")
+                return True
+            print("[INFO] ffmpeg was not found, using the simple crop")
+        except Exception as render_error:
+            print(f"[WARNING] Vertical reframe failed, using the simple crop: {render_error}")
         
+        full_clip = None
+        clip = None
         try:
             # Load video
             full_clip = VideoFileClip(video_path)
@@ -653,12 +746,12 @@ Requirements:
                 raise ValueError("Failed to extract subclip from video")
             
             # Get format settings
-            format_config = self.config["output_formats"][format_type]
             target_width = format_config["width"]
             target_height = format_config["height"]
             
-            # Resize to vertical format (9:16 aspect ratio)
-            clip = self._resize_to_vertical(clip, target_width, target_height)
+            # Reframe to 9:16: face crop, blurred background, or stacked speakers
+            fallback_mode = "track" if framing == "auto" else framing
+            clip = self._resize_to_vertical(clip, target_width, target_height, framing=fallback_mode)
             
             # Speed up if needed to fit duration
             max_duration = format_config["duration_max"]
@@ -668,10 +761,12 @@ Requirements:
                     clip = clip.fx(MultiplySpeed, speed_factor)
                 else:
                     clip = MultiplySpeed(clip, speed_factor)
-                print(f"âš¡ Sped up by {speed_factor:.2f}x to fit duration")
+                print(f"Sped up by {speed_factor:.2f}x to fit duration")
             
-            # Add engaging elements (including captions if enabled)
-            clip = self._add_engaging_elements(clip, format_type, clip_title, add_captions=True)
+            segments = self._cues_for_range(caption_cues, start_time, end_time) if burn_captions else []
+            clip = self._add_engaging_elements(
+                clip, format_type, hook or clip_title, add_captions=burn_captions, segments=segments
+            )
             
             # Write output
             clip.write_videofile(
@@ -686,16 +781,84 @@ Requirements:
             # Generate thumbnail (before closing clip)
             self._generate_thumbnail(clip, output_path)
             
-            print(f"âœ… Created: {output_path}")
+            print(f"Created: {output_path}")
             return True
             
         except Exception as e:
-            print(f"âŒ Error creating clip: {e}")
+            print(f"Error creating clip: {e}")
             return False
+        finally:
+            for item in (clip, full_clip):
+                if item is not None:
+                    try:
+                        item.close()
+                    except Exception:
+                        pass
     
-    def _resize_to_vertical(self, clip: VideoFileClip, target_width: int, target_height: int) -> VideoFileClip:
-        """Resize clip to vertical format, cropping intelligently"""
-        # Try to import Crop function
+    def _resize_to_vertical(self, clip: VideoFileClip, target_width: int, target_height: int, framing: str = "track") -> VideoFileClip:
+        """Resize clip to vertical format. framing is track, blur, or split."""
+        mode = (framing or "track").lower()
+        if mode == "blur":
+            return self._frame_blur(clip, target_width, target_height)
+        if mode == "split" and clip.w > clip.h * 1.2:
+            return self._frame_split(clip, target_width, target_height)
+        x_ratio = self._face_x_ratio(clip) if mode == "track" else 0.5
+        return self._frame_crop(clip, target_width, target_height, x_ratio)
+
+    def _apply_resize(self, clip, size):
+        if MOVIEPY_VERSION == 2:
+            return clip.fx(Resize, size)
+        return Resize(clip, size)
+
+    def _with_duration(self, clip, duration):
+        if hasattr(clip, "with_duration"):
+            return clip.with_duration(duration)
+        return clip.set_duration(duration)
+
+    def _with_position(self, clip, position):
+        if hasattr(clip, "with_position"):
+            return clip.with_position(position)
+        return clip.set_position(position)
+
+    def _with_audio(self, visual, source):
+        if getattr(source, "audio", None) is None:
+            return visual
+        if hasattr(visual, "with_audio"):
+            return visual.with_audio(source.audio)
+        return visual.set_audio(source.audio)
+
+    def _image_clip(self, array, duration):
+        try:
+            from moviepy import ImageClip
+        except ImportError:
+            from moviepy.editor import ImageClip
+        return self._with_duration(ImageClip(array), duration)
+
+    def _face_x_ratio(self, clip: VideoFileClip) -> float:
+        """Average horizontal face position, or 0.5 when detection is unavailable."""
+        try:
+            import cv2
+        except ImportError:
+            return 0.5
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        detector = cv2.CascadeClassifier(cascade_path)
+        if detector.empty():
+            return 0.5
+        centers = []
+        for fraction in (0.15, 0.4, 0.65, 0.85):
+            moment = min(clip.duration * fraction, max(0, clip.duration - 0.05))
+            frame = clip.get_frame(moment)
+            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            faces = detector.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(36, 36))
+            if len(faces):
+                x, _y, w, _h = max(faces, key=lambda rect: rect[2] * rect[3])
+                centers.append((x + w / 2) / frame.shape[1])
+        if not centers:
+            return 0.5
+        return sum(centers) / len(centers)
+
+    def _frame_crop(self, clip: VideoFileClip, target_width: int, target_height: int, x_ratio: float) -> VideoFileClip:
+        """Center or face-weighted crop into 9:16, then scale."""
         Crop = None
         try:
             if MOVIEPY_VERSION == 2:
@@ -705,43 +868,58 @@ Requirements:
                     from moviepy.video.fx.all import crop as Crop
                 except ImportError:
                     from moviepy.video.fx import crop as Crop
-        except:
-            # If crop is not available, just resize without crop
-            if MOVIEPY_VERSION == 2:
-                clip = clip.fx(Resize, (target_width, target_height))
-            else:
-                clip = Resize(clip, (target_width, target_height))
-            return clip
-        
-        # Calculate aspect ratios
+        except Exception:
+            Crop = None
+        if Crop is None:
+            return self._apply_resize(clip, (target_width, target_height))
+
         clip_aspect = clip.w / clip.h
         target_aspect = target_width / target_height
-        
-        if Crop is not None:
-            if clip_aspect > target_aspect:
-                # Clip is wider, crop sides (center crop)
-                new_width = int(clip.h * target_aspect)
-                x_center = clip.w / 2
-                if MOVIEPY_VERSION == 2:
-                    clip = clip.fx(Crop, x_center=x_center, width=new_width)
-                else:
-                    clip = Crop(clip, x_center=x_center, width=new_width)
+        if clip_aspect > target_aspect:
+            new_width = int(clip.h * target_aspect)
+            half = new_width / 2
+            x_center = max(half, min(clip.w - half, clip.w * x_ratio))
+            if MOVIEPY_VERSION == 2:
+                clip = clip.fx(Crop, x_center=x_center, width=new_width)
             else:
-                # Clip is taller, crop top/bottom (center crop)
-                new_height = int(clip.w / target_aspect)
-                y_center = clip.h / 2
-                if MOVIEPY_VERSION == 2:
-                    clip = clip.fx(Crop, y_center=y_center, height=new_height)
-                else:
-                    clip = Crop(clip, y_center=y_center, height=new_height)
-        
-        # Resize to target dimensions
-        if MOVIEPY_VERSION == 2:
-            clip = clip.fx(Resize, (target_width, target_height))
+                clip = Crop(clip, x_center=x_center, width=new_width)
         else:
-            clip = Resize(clip, (target_width, target_height))
-        return clip
-    
+            new_height = int(clip.w / target_aspect)
+            y_center = clip.h / 2
+            if MOVIEPY_VERSION == 2:
+                clip = clip.fx(Crop, y_center=y_center, height=new_height)
+            else:
+                clip = Crop(clip, y_center=y_center, height=new_height)
+        return self._apply_resize(clip, (target_width, target_height))
+
+    def _frame_blur(self, clip: VideoFileClip, target_width: int, target_height: int) -> VideoFileClip:
+        """Fit the full frame over a blurred cover, so nothing important is cropped away."""
+        import numpy as np
+        from PIL import Image, ImageEnhance, ImageFilter
+
+        moment = min(clip.duration * 0.35, max(0, clip.duration - 0.05))
+        frame = clip.get_frame(moment)
+        background = Image.fromarray(frame).resize((target_width, target_height), Image.LANCZOS)
+        background = background.filter(ImageFilter.GaussianBlur(radius=28))
+        background = ImageEnhance.Brightness(background).enhance(0.55)
+        bg_clip = self._image_clip(np.array(background), clip.duration)
+
+        scale = min(target_width / clip.w, target_height / clip.h)
+        fitted = self._apply_resize(clip, (max(2, int(clip.w * scale)), max(2, int(clip.h * scale))))
+        fitted = self._with_position(fitted, ("center", "center"))
+        composite = CompositeVideoClip([bg_clip, fitted], size=(target_width, target_height))
+        return self._with_audio(self._with_duration(composite, clip.duration), clip)
+
+    def _frame_split(self, clip: VideoFileClip, target_width: int, target_height: int) -> VideoFileClip:
+        """Stack the left and right of a wide shot, the way a two-person interview is reframed."""
+        half_height = target_height // 2
+        top = self._apply_resize(self._frame_crop(clip, target_width, half_height, 0.27), (target_width, half_height))
+        bottom = self._apply_resize(self._frame_crop(clip, target_width, half_height, 0.73), (target_width, half_height))
+        top = self._with_position(top, (0, 0))
+        bottom = self._with_position(bottom, (0, half_height))
+        composite = CompositeVideoClip([top, bottom], size=(target_width, target_height))
+        return self._with_audio(self._with_duration(composite, clip.duration), clip)
+
     def _transcribe_clip_audio(self, clip: VideoFileClip) -> List[Dict]:
         """Transcribe audio from clip using Whisper"""
         try:
@@ -818,25 +996,16 @@ Requirements:
                 bg_opacity = caption_config.get("background_opacity", 0.7)
                 position = caption_config.get("position", "bottom")
                 
-                # Create text clip
-                txt_clip = TextClip(
-                    text,
-                    fontsize=font_size,
-                    color=font_color,
-                    font='Arial-Bold',
-                    method='caption',
-                    size=(clip.w * 0.9, None),
-                    stroke_color='black',
-                    stroke_width=3
-                ).set_duration(duration).set_start(start_time)
-                
-                # Position caption
+                txt_clip = self._make_text_clip(text, font_size, int(clip.w * 0.9), font_color)
+                txt_clip = self._with_duration(txt_clip, duration)
+                txt_clip = self._with_start(txt_clip, start_time)
+
                 if position == "bottom":
-                    txt_clip = txt_clip.set_position(('center', clip.h * 0.85))
+                    txt_clip = self._with_position(txt_clip, ('center', clip.h * 0.78))
                 elif position == "top":
-                    txt_clip = txt_clip.set_position(('center', 'top'))
-                else:  # center
-                    txt_clip = txt_clip.set_position('center')
+                    txt_clip = self._with_position(txt_clip, ('center', 140))
+                else:
+                    txt_clip = self._with_position(txt_clip, 'center')
                 
                 # Add background if enabled
                 if bg_opacity > 0:
@@ -852,36 +1021,46 @@ Requirements:
             print(f"⚠️  Could not add captions: {e}")
             return clip
     
-    def _add_engaging_elements(self, clip: VideoFileClip, format_type: str, title: str = None, add_captions: bool = True) -> CompositeVideoClip:
-        """Add engaging elements like captions, effects, etc."""
+    def _with_start(self, clip, start):
+        if hasattr(clip, "with_start"):
+            return clip.with_start(start)
+        return clip.set_start(start)
+
+    def _make_text_clip(self, text: str, font_size: int, width: int, color: str = "white"):
+        """Text overlay that works on MoviePy 1.x and 2.x."""
+        common = dict(
+            color=color,
+            method="caption",
+            size=(width, None),
+            stroke_color="black",
+            stroke_width=3,
+        )
+        try:
+            return TextClip(text=text, font_size=font_size, **common)
+        except TypeError:
+            return TextClip(text, fontsize=font_size, font="Arial-Bold", **common)
+
+    def _add_engaging_elements(self, clip: VideoFileClip, format_type: str, title: str = None, add_captions: bool = True, segments: Optional[List[Dict]] = None) -> CompositeVideoClip:
+        """Add a hook line and burned-in captions."""
         clips_to_composite = [clip]
         
-        # Add title text overlay if provided (for first 2 seconds)
         if title and len(title) > 0:
             try:
-                title_clip = TextClip(
-                    title[:50],  # Limit length
-                    fontsize=40,
-                    color='white',
-                    font='Arial-Bold',
-                    method='caption',
-                    size=(clip.w * 0.9, None),
-                    stroke_color='black',
-                    stroke_width=2
-                ).set_position(('center', 'top')).set_duration(min(2, clip.duration))
-                
+                title_clip = self._make_text_clip(title[:60], 54, int(clip.w * 0.88))
+                title_clip = self._with_position(title_clip, ("center", 70))
+                title_clip = self._with_duration(title_clip, min(4, clip.duration))
                 clips_to_composite.append(title_clip)
             except Exception as e:
-                print(f"⚠️  Could not add title overlay: {e}")
+                print(f"[WARNING] Could not add hook overlay: {e}")
         
-        # Add captions if enabled
         if add_captions and self.config.get("captions", {}).get("enabled", True):
             try:
-                segments = self._transcribe_clip_audio(clip)
+                if not segments and self.config.get("captions", {}).get("whisper_fallback", False):
+                    segments = self._transcribe_clip_audio(clip)
                 if segments:
                     return self._add_captions_to_clip(CompositeVideoClip(clips_to_composite), segments)
             except Exception as e:
-                print(f"⚠️  Caption generation skipped: {e}")
+                print(f"[WARNING] Caption generation skipped: {e}")
         
         return CompositeVideoClip(clips_to_composite)
     
@@ -916,7 +1095,12 @@ Requirements:
                 output_filename = f"{video_name}_clip{i+1}_{format_type}.mp4"
                 output_path = self.output_dir / output_filename
                 
-                if self.create_clip(video_path, start, end, str(output_path), format_type, clip_title):
+                if self.create_clip(
+                    video_path, start, end, str(output_path), format_type, clip_title,
+                    framing=self.config.get("framing", {}).get("mode", "track"),
+                    hook=clip_info.get("hook") or clip_title,
+                    caption_cues=self.caption_cues,
+                ):
                     output_files.append(str(output_path))
         
         print(f"\nðŸŽ‰ Successfully created {len(output_files)} clips!")

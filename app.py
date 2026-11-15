@@ -40,11 +40,15 @@ def process_video():
         url = data.get('url', '').strip()
         urls = data.get('urls', [])  # Batch processing
         formats = data.get('formats', ['tiktok', 'youtube_shorts'])
+        framing = data.get('framing', 'track')
+        if framing not in ('auto', 'track', 'blur', 'split'):
+            framing = 'auto'
+        burn_captions = bool(data.get('captions', True))
         
         # Support both single URL and batch URLs
         if urls and isinstance(urls, list):
             # Batch processing
-            return process_batch(urls, formats)
+            return process_batch(urls, formats, framing, burn_captions)
         elif url:
             # Single video processing
             if not (url.startswith('http://') or url.startswith('https://')):
@@ -66,7 +70,10 @@ def process_video():
             }
             
             # Start processing in background thread
-            thread = threading.Thread(target=process_video_background, args=(job_id, url, formats))
+            thread = threading.Thread(
+                target=process_video_background,
+                args=(job_id, url, formats, framing, burn_captions)
+            )
             thread.daemon = True
             thread.start()
             
@@ -81,7 +88,7 @@ def process_video():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-def process_batch(urls, formats):
+def process_batch(urls, formats, framing='track', burn_captions=True):
     """Process multiple videos in batch"""
     job_ids = []
     
@@ -105,7 +112,10 @@ def process_batch(urls, formats):
         }
         
         # Start processing
-        thread = threading.Thread(target=process_video_background, args=(job_id, url, formats))
+        thread = threading.Thread(
+            target=process_video_background,
+            args=(job_id, url, formats, framing, burn_captions)
+        )
         thread.daemon = True
         thread.start()
     
@@ -116,7 +126,7 @@ def process_batch(urls, formats):
         'message': f'Started processing {len(job_ids)} videos'
     })
 
-def process_video_background(job_id, url, formats):
+def process_video_background(job_id, url, formats, framing='track', burn_captions=True):
     """Process video in background thread"""
     try:
         jobs[job_id]['progress'] = 10
@@ -132,11 +142,12 @@ def process_video_background(job_id, url, formats):
         jobs[job_id]['progress'] = 30
         jobs[job_id]['message'] = 'Extracting transcript...'
         
-        # Get transcript
+        # Get transcript and keep a snapshot of timed captions for this job
         transcript = generator.get_video_transcript(url)
+        caption_cues = list(generator.caption_cues)
         
         jobs[job_id]['progress'] = 40
-        jobs[job_id]['message'] = 'Analyzing video with AI...'
+        jobs[job_id]['message'] = 'Ranking viral moments...'
         
         # Find clips
         clips = generator.find_engaging_clips_ai(video_path, transcript)
@@ -192,8 +203,14 @@ def process_video_background(job_id, url, formats):
                     jobs[job_id]['progress'] = progress
                     jobs[job_id]['message'] = f'Creating clip {current_clip}/{total_clips}: {task["clip_title"]} ({task["format_type"]})...'
                 
-                if generator.create_clip(task['video_path'], task['start'], task['end'], 
-                                       task['output_path'], task['format_type'], task['clip_title']):
+                if generator.create_clip(
+                    task['video_path'], task['start'], task['end'],
+                    task['output_path'], task['format_type'], task['clip_title'],
+                    framing=framing,
+                    hook=task['clip_info'].get('hook') or task['clip_title'],
+                    caption_cues=caption_cues,
+                    burn_captions=burn_captions,
+                ):
                     thumbnail_path = generator.output_dir / f"{Path(task['output_path']).stem}.jpg"
                     
                     # Get file metadata
@@ -220,6 +237,7 @@ def process_video_background(job_id, url, formats):
                         'reason': task['clip_info'].get('reason', 'Engaging moment'),
                         'thumbnail': str(thumbnail_path) if thumbnail_path.exists() else None,
                         'engagement_score': task['clip_info'].get('engagement_score', 7),
+                        'viral_score': task['clip_info'].get('viral_score'),
                         'file_size': file_size,
                         'file_size_mb': round(file_size_mb, 2),
                         'duration': round(duration, 2)
