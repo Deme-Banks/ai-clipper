@@ -70,10 +70,16 @@
                                     type="url" 
                                     id="videoUrl" 
                                     name="url" 
-                                    placeholder="https://www.youtube.com/watch?v=..." 
+                                    placeholder="YouTube or Twitch link, including a live stream" 
                                     required
                                 >
-                                <small>Supports YouTube and Twitch URLs</small>
+                                <small>VODs and clips are read directly and the full video is not saved. A live link records from now, not the whole broadcast.</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="liveMinutes">Live capture (minutes)</label>
+                                <input type="number" id="liveMinutes" name="liveMinutes" min="1" max="10" value="3" step="1">
+                                <small>Used only for a live link. Default is 3 minutes, maximum is 10. Recording starts at the current edge, or at the end of the DVR window when the stream can be seeked.</small>
                             </div>
 
                             <div class="form-group">

@@ -46,7 +46,8 @@ function initializeApp() {
                 url: url,
                 formats: formats,
                 framing: document.getElementById('framingMode').value,
-                captions: document.getElementById('burnCaptions').checked
+                captions: document.getElementById('burnCaptions').checked,
+                live_minutes: document.getElementById('liveMinutes').value
             })
         });
         

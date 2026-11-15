@@ -77,6 +77,8 @@ class ClipGenerator:
         self.ai_provider = None
         self.ai_model = self.config.get("ai_settings", {}).get("model", "gpt-4o-mini")
         self.caption_cues = []
+        self.last_error = None
+        self.media = None
         llm_base = os.getenv("LLM_BASE_URL", "").strip()
         local_model = os.getenv("LLM_MODEL") or self.config.get("ai_settings", {}).get("local_model", "llama3.2")
 
@@ -254,45 +256,86 @@ class ClipGenerator:
         except Exception as e:
             print(f"⚠️  Error cleaning cache: {e}")
     
-    def download_video(self, url: str) -> Optional[str]:
-        """Download video from Twitch or YouTube URL (with caching)"""
-        # Check cache first
-        cached_path = self._get_cached_video(url)
-        if cached_path:
-            return cached_path
-        
-        print(f"📥 Downloading video from: {url}")
-        
-        ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'outtmpl': str(self.downloads_dir / '%(title)s.%(ext)s'),
-            'quiet': False,
-            'no_warnings': False,
-        }
-        
+    def default_live_seconds(self) -> float:
+        from sources import DEFAULT_LIVE_SECONDS, clamp_live_seconds
+        env = os.getenv("LIVE_WINDOW_SECONDS", "").strip()
+        if env:
+            return clamp_live_seconds(env, DEFAULT_LIVE_SECONDS)
+        configured = self.config.get("live", {}).get("window_seconds", DEFAULT_LIVE_SECONDS)
+        return clamp_live_seconds(configured, DEFAULT_LIVE_SECONDS)
+
+    def resolve_stream(self, url: str, live_seconds: Optional[float] = None) -> Optional[Dict]:
+        """Resolve a direct stream URL. The full source is not saved."""
+        from sources import UnsupportedUrlError, resolve_media
+
+        self.last_error = None
+        if live_seconds is None:
+            live_seconds = self.default_live_seconds()
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-                # Ensure .mp4 extension
-                if not filename.endswith('.mp4'):
-                    new_filename = filename.rsplit('.', 1)[0] + '.mp4'
-                    if os.path.exists(filename):
-                        os.rename(filename, new_filename)
-                    filename = new_filename
-                
-                # Save to cache
-                video_info = {
-                    'title': info.get('title', 'Unknown'),
-                    'duration': info.get('duration', 0)
-                }
-                self._save_to_cache(url, filename, video_info)
-                
-                print(f"✅ Downloaded: {filename}")
-                return filename
-        except Exception as e:
-            print(f"âŒ Error downloading video: {e}")
+            media = resolve_media(url, live_seconds=live_seconds)
+        except UnsupportedUrlError as error:
+            self.last_error = str(error)
+            print(f"[WARNING] {error}")
             return None
+        except Exception as error:
+            self.last_error = f"Could not open that link: {error}"
+            print(f"[WARNING] {self.last_error}")
+            return None
+        if media.get("is_live"):
+            print(f"Live {media['source']} stream. Will record {media['live_seconds']:.0f}s from the newest part: {media['title']}")
+        else:
+            print(f"Opened {media['source']} stream ({media['duration']:.0f}s): {media['title']}")
+        self.media = media
+        return media
+
+    def capture_live_window(self, media: Dict) -> Optional[str]:
+        """Record only the bounded live window. ffmpeg is always stopped with -t."""
+        import subprocess
+        import tempfile
+        from framing import ffmpeg_exe, stream_input
+
+        seconds = float(media.get("live_seconds") or 0)
+        if seconds <= 0:
+            self.last_error = "Live capture needs a finite window"
+            return None
+        ffmpeg = ffmpeg_exe()
+        if not ffmpeg:
+            self.last_error = "ffmpeg was not found, so the live window cannot be recorded"
+            return None
+        handle = tempfile.NamedTemporaryFile(suffix=".mp4", prefix="live_", delete=False)
+        path = handle.name
+        handle.close()
+        seek = media.get("live_seek")
+        cmd = [ffmpeg, "-y", *stream_input(media["video_url"], media.get("headers"), seek, seconds)]
+        if media.get("audio_url"):
+            cmd += stream_input(media["audio_url"], media.get("headers"), seek, seconds)
+            cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+        cmd += [
+            "-t", f"{seconds:.3f}",
+            "-c:v", "libx264", "-preset", "veryfast",
+            "-c:a", "aac", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            path,
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+        except Exception as error:
+            print(f"[WARNING] Live capture failed: {error}")
+            self.last_error = "Could not record the live window"
+            if os.path.exists(path):
+                os.remove(path)
+            return None
+        if not os.path.exists(path) or os.path.getsize(path) == 0:
+            self.last_error = "The live window was empty"
+            if os.path.exists(path):
+                os.remove(path)
+            return None
+        return path
+
+    def clip_stem(self, media: Dict) -> str:
+        raw = media.get("title") or media.get("id") or "clip"
+        stem = re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_")[:50]
+        return stem or str(media.get("id") or "clip")
     
     def get_video_transcript(self, url: str) -> Optional[str]:
         """Extract a timestamped transcript and keep cues for burned-in captions."""
@@ -403,13 +446,14 @@ class ClipGenerator:
                 ranged.append({'start': cue_start, 'end': cue_end, 'text': text})
         return ranged
     
-    def find_engaging_clips_ai(self, video_path: str, transcript: Optional[str] = None) -> List[Dict]:
+    def find_engaging_clips_ai(self, video_path: str, transcript: Optional[str] = None, duration: Optional[float] = None, remote: bool = False) -> List[Dict]:
         """Use AI to find the most engaging moments in the video"""
-        clip = VideoFileClip(video_path)
-        duration = clip.duration
-        clip.close()
+        if duration is None:
+            clip = VideoFileClip(video_path)
+            duration = clip.duration
+            clip.close()
         
-        if not self.caption_cues:
+        if not self.caption_cues and not remote:
             local_transcript = self.transcribe_video(video_path)
             if local_transcript:
                 transcript = local_transcript
@@ -421,12 +465,12 @@ class ClipGenerator:
                 return self._ai_clip_detection(video_path, transcript, duration)
             else:
                 print("⚠️  No transcript available. AI detection requires transcript. Using heuristics...")
-                return self._heuristic_clip_detection(video_path, duration)
+                return self._heuristic_clip_detection(video_path, duration, allow_audio=not remote)
         else:
             # Fallback: Use heuristics to find potential clips
             if not self.openai_enabled:
                 print("💡 Using heuristic detection (add OpenAI API key to .env for AI-powered clip detection)")
-            return self._heuristic_clip_detection(video_path, duration)
+            return self._heuristic_clip_detection(video_path, duration, allow_audio=not remote)
     
     def _llm_complete(self, system: str, user: str) -> str:
         """One chat completion. Works for OpenAI and a local OpenAI-compatible server."""
@@ -508,7 +552,7 @@ class ClipGenerator:
             cues = self._cues_from_transcript_lines(transcript)
         if not cues:
             print("⚠️  No timed transcript, using heuristics...")
-            return self._heuristic_clip_detection(video_path, duration)
+            return self._heuristic_clip_detection(video_path, duration, allow_audio=not str(video_path).startswith("http"))
 
         settings = self.config["clip_settings"]
         try:
@@ -523,14 +567,14 @@ class ClipGenerator:
             )
         except (RateLimitError, APIConnectionError, APITimeoutError, APIError, ValueError, json.JSONDecodeError) as error:
             print(f"⚠️  Highlight ranking failed, using heuristics: {error}")
-            return self._heuristic_clip_detection(video_path, duration)
+            return self._heuristic_clip_detection(video_path, duration, allow_audio=not str(video_path).startswith("http"))
         except Exception as error:
             print(f"⚠️  Highlight ranking failed, using heuristics: {error}")
-            return self._heuristic_clip_detection(video_path, duration)
+            return self._heuristic_clip_detection(video_path, duration, allow_audio=not str(video_path).startswith("http"))
 
         if not ranked:
             print("⚠️  AI returned no valid clips, using heuristics...")
-            return self._heuristic_clip_detection(video_path, duration)
+            return self._heuristic_clip_detection(video_path, duration, allow_audio=not str(video_path).startswith("http"))
 
         buffer_seconds = settings["buffer_seconds"]
         clips = []
@@ -639,15 +683,52 @@ class ClipGenerator:
             print(f"⚠️  Audio analysis failed: {e}")
             return []
     
-    def _heuristic_clip_detection(self, video_path: str, duration: float) -> List[Dict]:
+    def transcribe_range(self, media: Dict, start: float, end: float) -> List[Dict]:
+        """Transcribe one clip range. The extract is deleted and the full VOD is not saved."""
+        import subprocess
+        import tempfile
+        from framing import ffmpeg_exe, stream_input
+
+        ffmpeg = ffmpeg_exe()
+        if not ffmpeg:
+            return []
+        src = media.get("audio_url") or media.get("video_url")
+        if not src:
+            return []
+        wav_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+                wav_path = handle.name
+            duration = max(0.4, float(end) - float(start))
+            subprocess.run(
+                [
+                    ffmpeg, "-y",
+                    *stream_input(src, media.get("headers"), start, duration),
+                    "-vn", "-ac", "1", "-ar", "16000", wav_path,
+                ],
+                check=True,
+                capture_output=True,
+            )
+            return self._whisper_cues(wav_path)
+        except Exception as error:
+            print(f"[WARNING] Could not transcribe this clip range: {error}")
+            return []
+        finally:
+            if wav_path and os.path.exists(wav_path):
+                try:
+                    os.remove(wav_path)
+                except OSError:
+                    pass
+
+    def _heuristic_clip_detection(self, video_path: str, duration: float, allow_audio: bool = True) -> List[Dict]:
         """Fallback: Use heuristics to find potential clips, enhanced with audio analysis"""
         clips = []
         min_duration = self.config["clip_settings"]["min_duration"]
         max_duration = self.config["clip_settings"]["max_duration"]
         preferred_duration = self.config["clip_settings"]["preferred_duration"]
         
-        # Try audio analysis first
-        audio_peaks = self._analyze_audio_engagement(video_path, duration)
+        # A remote URL is not scanned end to end. Time ranges are used instead.
+        audio_peaks = self._analyze_audio_engagement(video_path, duration) if allow_audio else []
         
         if audio_peaks:
             # Use audio peaks as clip starting points
@@ -688,15 +769,23 @@ class ClipGenerator:
     def create_clip(self, video_path: str, start_time: float, end_time: float, 
                    output_path: str, format_type: str = "tiktok", clip_title: str = None,
                    framing: str = "track", hook: str = None, caption_cues: Optional[List[Dict]] = None,
-                   burn_captions: bool = True) -> bool:
+                   burn_captions: bool = True, media: Optional[Dict] = None) -> bool:
         """Create a formatted clip for TikTok or YouTube Shorts"""
         print(f"Creating {format_type} clip ({framing}): {start_time}s - {end_time}s")
 
         format_config = self.config["output_formats"][format_type]
+        source = media["video_url"] if media else video_path
+        remote = bool(media) or str(source).startswith("http")
         try:
             from framing import render_vertical_clip, write_thumbnail
+            segments = self._cues_for_range(caption_cues, start_time, end_time) if burn_captions else []
+            if burn_captions and not segments and media:
+                segments = self.transcribe_range(media, start_time, end_time)
+            known_size = None
+            if media and media.get("width") and media.get("height"):
+                known_size = (media["width"], media["height"], bool(media.get("has_audio")))
             rendered = render_vertical_clip(
-                video_path,
+                source,
                 output_path,
                 start_time,
                 end_time,
@@ -705,9 +794,12 @@ class ClipGenerator:
                 fps=format_config["fps"],
                 mode=framing or "auto",
                 hook=(hook or clip_title) if burn_captions else None,
-                cues=self._cues_for_range(caption_cues, start_time, end_time) if burn_captions else [],
+                cues=segments,
                 burn_captions=burn_captions,
                 max_duration=format_config["duration_max"],
+                headers=media.get("headers") if media else None,
+                audio_url=media.get("audio_url") if media else None,
+                known_size=known_size,
             )
             if rendered:
                 thumbnail_path = Path(output_path).with_suffix(".jpg")
@@ -720,6 +812,12 @@ class ClipGenerator:
             print("[INFO] ffmpeg was not found, using the simple crop")
         except Exception as render_error:
             print(f"[WARNING] Vertical reframe failed, using the simple crop: {render_error}")
+            rendered = False
+
+        if remote:
+            if not rendered:
+                print("[WARNING] Could not cut this range from the stream")
+            return bool(rendered)
         
         full_clip = None
         clip = None
@@ -1064,47 +1162,61 @@ class ClipGenerator:
         
         return CompositeVideoClip(clips_to_composite)
     
-    def process_url(self, url: str, formats: List[str] = ["tiktok", "youtube_shorts"]) -> List[str]:
-        """Main processing function: Download, analyze, and create clips"""
+    def process_url(self, url: str, formats: List[str] = ["tiktok", "youtube_shorts"], live_seconds: Optional[float] = None) -> List[str]:
+        """Resolve a stream, rank moments, and cut only those ranges."""
         self.last_url = url
         
-        # Download video
-        video_path = self.download_video(url)
-        if not video_path:
+        media = self.resolve_stream(url, live_seconds=live_seconds)
+        if not media:
             return []
-        
-        # Try to get transcript for better AI detection
-        transcript = self.get_video_transcript(url)
-        
-        # Find engaging clips
-        clips = self.find_engaging_clips_ai(video_path, transcript)
-        if not clips:
-            print("âš ï¸ No clips found")
-            return []
-        
-        # Create clips in requested formats
-        output_files = []
-        video_name = Path(video_path).stem
-        
-        for i, clip_info in enumerate(clips):
-            start = clip_info["start_time"]
-            end = clip_info["end_time"]
-            clip_title = clip_info.get("title", f"Clip {i+1}")
-            
-            for format_type in formats:
-                output_filename = f"{video_name}_clip{i+1}_{format_type}.mp4"
-                output_path = self.output_dir / output_filename
-                
-                if self.create_clip(
-                    video_path, start, end, str(output_path), format_type, clip_title,
-                    framing=self.config.get("framing", {}).get("mode", "track"),
-                    hook=clip_info.get("hook") or clip_title,
-                    caption_cues=self.caption_cues,
-                ):
-                    output_files.append(str(output_path))
-        
-        print(f"\nðŸŽ‰ Successfully created {len(output_files)} clips!")
-        return output_files
+
+        live_path = None
+        try:
+            if media.get("is_live"):
+                live_path = self.capture_live_window(media)
+                if not live_path:
+                    return []
+                source = live_path
+                clip_media = None
+                remote = False
+                duration = media["live_seconds"]
+            else:
+                source = media["video_url"]
+                clip_media = media
+                remote = True
+                duration = media["duration"]
+
+            transcript = None if media.get("is_live") else self.get_video_transcript(url)
+            clips = self.find_engaging_clips_ai(source, transcript, duration=duration, remote=remote)
+            if not clips:
+                print("No clips found")
+                return []
+
+            output_files = []
+            video_name = self.clip_stem(media)
+            for i, clip_info in enumerate(clips):
+                start = clip_info["start_time"]
+                end = clip_info["end_time"]
+                clip_title = clip_info.get("title", f"Clip {i+1}")
+                for format_type in formats:
+                    output_filename = f"{video_name}_clip{i+1}_{format_type}.mp4"
+                    output_path = self.output_dir / output_filename
+                    if self.create_clip(
+                        source, start, end, str(output_path), format_type, clip_title,
+                        framing=self.config.get("framing", {}).get("mode", "track"),
+                        hook=clip_info.get("hook") or clip_title,
+                        caption_cues=self.caption_cues,
+                        media=clip_media,
+                    ):
+                        output_files.append(str(output_path))
+            print(f"\nSuccessfully created {len(output_files)} clips!")
+            return output_files
+        finally:
+            if live_path and os.path.exists(live_path):
+                try:
+                    os.remove(live_path)
+                except OSError:
+                    pass
     
     def edit_clip(self, video_path: str, output_path: str, 
                   trim_start: Optional[float] = None,
@@ -1503,25 +1615,35 @@ def main():
     import sys
     
     if len(sys.argv) < 2:
-        print("Usage: python clip_generator.py <url> [tiktok|youtube_shorts|both]")
+        print("Usage: python clip_generator.py <url> [tiktok|youtube_shorts|both] [live window]")
         print("Example: python clip_generator.py https://www.youtube.com/watch?v=... both")
+        print("Live window: 3 or 3m means minutes, 180 means seconds. Default is 180 seconds.")
         return
     
     url = sys.argv[1]
     formats = ["tiktok", "youtube_shorts"]
-    
-    if len(sys.argv) > 2:
-        format_arg = sys.argv[2].lower()
-        if format_arg == "tiktok":
+    live_token = None
+    for arg in sys.argv[2:]:
+        lowered = arg.lower()
+        if lowered == "tiktok":
             formats = ["tiktok"]
-        elif format_arg == "youtube_shorts":
+        elif lowered == "youtube_shorts":
             formats = ["youtube_shorts"]
-        elif format_arg != "both":
-            print("Invalid format. Use: tiktok, youtube_shorts, or both")
-            return
+        elif lowered == "both":
+            formats = ["tiktok", "youtube_shorts"]
+        else:
+            live_token = arg
     
     generator = ClipGenerator()
-    output_files = generator.process_url(url, formats)
+    live_seconds = None
+    if live_token:
+        from sources import interpret_cli_window
+        try:
+            live_seconds = interpret_cli_window(live_token, generator.default_live_seconds())
+        except ValueError:
+            print("Invalid option. Use tiktok, youtube_shorts, or both, then an optional live window like 3, 3m, or 180.")
+            return
+    output_files = generator.process_url(url, formats, live_seconds=live_seconds)
     
     if output_files:
         print("\nðŸ“ Output files:")

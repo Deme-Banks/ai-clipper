@@ -1,10 +1,10 @@
 ﻿# AI Clip Generator
 
-Turn a YouTube or Twitch video into vertical TikTok and YouTube Shorts clips. The app downloads the video, ranks the moments most likely to hold a viewer, reframes each one to 9:16, and burns in a hook line plus captions.
+Turn a YouTube or Twitch link into vertical TikTok and YouTube Shorts clips. The app reads the link directly, ranks the moments most likely to hold a viewer, and cuts only those ranges. The full source video is not saved.
 
 ## Features
 
-- **YouTube and Twitch download**, with a local cache so the same URL is not fetched twice
+- **YouTube and Twitch links**, read directly. Accepted links are YouTube watch, Shorts, youtu.be, and live URLs, plus Twitch VODs (`twitch.tv/videos/ID`), clips (`clips.twitch.tv` or `twitch.tv/name/clip/slug`), and Twitch live channels. A live link records a short window from now (default 3 minutes, maximum 10), not the whole broadcast. VODs and clips are not saved in full.
 - **Viral ranking**: each clip gets a score out of 100, a hook line, and a one-sentence reason. The ranker looks for hooks, emotional peaks, strong opinions, reveals, conflict, quotable lines, story payoffs, and practical tips
 - **Long videos**: anything over 30 minutes is split into overlapping chunks so the later half is still considered. Overlapping candidates are collapsed by score
 - **Vertical framing**
@@ -13,8 +13,8 @@ Turn a YouTube or Twitch video into vertical TikTok and YouTube Shorts clips. Th
   - **Split**: stack two people when both are in frame
   - **Blur**: keep the whole picture over a darkened background
   - A video that is already vertical is scaled, not cropped apart
-- **Captions and hook text** burned into the clip. Captions come from the video's own subtitles. If there are none, a local Whisper transcript is used when one is installed
-- **OpenAI or a local model** (Ollama, LM Studio, or any OpenAI-compatible server) for ranking. With no model, audio energy is used instead
+- **Captions and hook text** burned into the clip. YouTube captions are read without downloading the video. If a clip has no captions, only that short range is transcribed when faster-whisper or Whisper is installed
+- **OpenAI or a local model** (Ollama, LM Studio, or any OpenAI-compatible server) for ranking. With no captions and no model, clips are spaced through the video instead of scanning the whole file
 - **Web UI** for progress, preview, download, a clip library, compilation, and a light/dark theme
 
 ## Requirements
@@ -69,7 +69,7 @@ python app.py
 
 Open http://localhost:5000.
 
-1. Paste a YouTube or Twitch URL, or upload a file.
+1. Paste a YouTube or Twitch URL, including a live stream. For a live link, set how many minutes to record (1 to 10). You can also upload a file you already have.
 2. Choose a framing mode. Auto is the default.
 3. Leave captions on to burn in the hook and subtitles.
 4. Pick TikTok, YouTube Shorts, or both.
@@ -90,6 +90,13 @@ python clip_generator.py https://www.youtube.com/watch?v=VIDEO_ID tiktok
 python clip_generator.py https://www.youtube.com/watch?v=VIDEO_ID youtube_shorts
 ```
 
+A live window is optional and does not change those commands. `3` or `3m` means minutes. A number above 10 is seconds. The default is 180 seconds (`LIVE_WINDOW_SECONDS`, or `live.window_seconds` in `config.json`).
+
+```bash
+python clip_generator.py https://www.youtube.com/watch?v=LIVE_ID both 3
+python clip_generator.py https://www.twitch.tv/CHANNEL 180
+```
+
 The CLI uses the framing mode in `config.json` (`framing.mode`, default `auto`).
 
 ## Output
@@ -99,7 +106,7 @@ Clips land in `output/`:
 - `video_title_clip1_tiktok.mp4`
 - `video_title_clip1_youtube_shorts.mp4`
 
-Downloads are stored in `downloads/`. Repeat URLs are served from `cache/` until they pass `cache.max_age_days`. Transcripts made locally are cached next to that as `<video>.cues.json`.
+Only the finished clips are stored. The source video is not saved in `downloads/` or `cache/`. A stream URL from YouTube or Twitch is signed and expires, so clips are cut in the same session that opened the link.
 
 ## Configuration
 
@@ -116,16 +123,17 @@ Downloads are stored in `downloads/`. Repeat URLs are served from `cache/` until
 | `ai_settings.local_model` | `llama3.2` | Model name on the local server |
 | `ai_settings.max_clips_per_video` | 5 | How many clips to render |
 | `captions.enabled` | true | Burn captions when cues exist |
+| `live.window_seconds` | 180 | How much of a live stream to record. Capped at 600 seconds |
 
 Output size is 1080x1920 at 30 fps for both TikTok and YouTube Shorts.
 
 ## How a clip is made
 
-1. Download the video, or reuse the cache.
-2. Load YouTube captions. If the video has none, transcribe it with faster-whisper or Whisper and cache the cues.
-3. Classify the video (podcast, tutorial, vlog, and so on) and rank moments. Videos longer than 30 minutes are ranked in 20-minute windows that overlap by one minute.
+1. Resolve a direct stream URL with yt-dlp. Nothing is written for the source.
+2. Load YouTube captions without downloading video. A live URL instead records a bounded window with ffmpeg `-t` (the newest DVR minutes when the stream can be seeked, otherwise the live edge).
+3. Classify the video and rank moments. Videos longer than 30 minutes are ranked in 20-minute windows that overlap by one minute.
 4. Drop a clip when more than half of it overlaps a higher-scoring clip.
-5. Reframe to 9:16, burn the hook and captions, and write the mp4 plus a thumbnail.
+5. ffmpeg reads the stream with `-ss` and `-t`, so only that range is transferred, then reframes it to 9:16 and burns the hook and captions. If that range has no captions, only that short extract is transcribed.
 
 ## Troubleshooting
 
@@ -133,11 +141,11 @@ Output size is 1080x1920 at 30 fps for both TikTok and YouTube Shorts.
 
 **No faces are followed.** Install OpenCV with `pip install opencv-python-headless`. Without it, Auto uses the blurred full-frame layout on widescreen video.
 
-**Clips are chosen from audio peaks.** Ranking needs captions or a transcript, plus OpenAI or a local model. Install `faster-whisper` when the source has no subtitles.
+**Clips are spaced through the video.** Ranking needs captions plus OpenAI or a local model. Without captions, the app does not download the whole VOD just to guess moments.
 
-**The model request fails.** Check `OPENAI_API_KEY`, billing, or that Ollama is running. The app falls back to audio peaks.
+**The model request fails.** Check `OPENAI_API_KEY`, billing, or that Ollama is running.
 
-**A download fails.** Confirm the URL plays in a browser. Some videos block downloading.
+**The link will not open.** Confirm it plays in a browser. If cutting a VOD fails after the tab has been open a long time, start again so the signed stream URL is fresh. A live recording stops after the chosen window even if the broadcast continues.
 
 ## License
 

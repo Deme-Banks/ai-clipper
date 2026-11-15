@@ -277,6 +277,21 @@ def dedupe_sendcmd(xs, fps, crop_w, frame_w):
     return lines
 
 
+def stream_input(url, headers=None, start=None, duration=None):
+    """ffmpeg input args. -ss/-t before -i so a remote URL only transfers that range."""
+    args = []
+    if headers:
+        blob = "".join(f"{key}: {value}\r\n" for key, value in headers.items() if value)
+        if blob:
+            args += ["-headers", blob]
+    if start is not None:
+        args += ["-ss", f"{float(start):.3f}"]
+    if duration is not None:
+        args += ["-t", f"{float(duration):.3f}"]
+    args += ["-i", str(url)]
+    return args
+
+
 def ffmpeg_exe():
     configured = os.environ.get("FFMPEG_PATH", "").strip()
     if configured and Path(configured).exists():
@@ -328,7 +343,7 @@ def _run(cmd):
     return result
 
 
-def sample_faces(ffmpeg, src, start, duration, fps=4):
+def sample_faces(ffmpeg, src, start, duration, fps=4, headers=None):
     try:
         import cv2
     except ImportError:
@@ -341,8 +356,8 @@ def sample_faces(ffmpeg, src, start, duration, fps=4):
     with tempfile.TemporaryDirectory() as temp:
         folder = Path(temp)
         _run([
-            ffmpeg, "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}",
-            "-i", str(src), "-vf", f"fps={fps},scale=640:-2",
+            ffmpeg, "-y", *stream_input(src, headers, start, duration),
+            "-vf", f"fps={fps},scale=640:-2",
             "-q:v", "6", str(folder / "%04d.jpg"),
         ])
         for image_path in sorted(folder.glob("*.jpg")):
@@ -371,15 +386,25 @@ def sample_faces(ffmpeg, src, start, duration, fps=4):
 def render_vertical_clip(
     src, dest, start, end, out_w, out_h, fps=30, mode="auto",
     hook=None, cues=None, burn_captions=True, max_duration=60,
+    headers=None, audio_url=None, known_size=None,
 ):
-    """Cut, reframe, and burn captions in one ffmpeg pass. Returns False if ffmpeg is missing."""
+    """Cut, reframe, and burn captions in one ffmpeg pass. Returns False if ffmpeg is missing.
+
+    ``src`` may be a local file or a direct stream URL. ``-ss`` and ``-t`` are
+    placed before the input so a remote URL only transfers the clip range.
+    """
     ffmpeg = ffmpeg_exe()
     if not ffmpeg:
         return False
     duration = max(0.4, float(end) - float(start))
     speed = duration / max_duration if duration > max_duration else 1.0
-    src_w, src_h, has_audio = probe_video(ffmpeg, src)
-    face_frames = sample_faces(ffmpeg, src, start, duration) if mode in ("auto", "track", "split") else []
+    if known_size:
+        src_w, src_h, has_audio = known_size
+    else:
+        src_w, src_h, has_audio = probe_video(ffmpeg, src)
+    if audio_url:
+        has_audio = True
+    face_frames = sample_faces(ffmpeg, src, start, duration, headers=headers) if mode in ("auto", "track", "split") else []
     layout = choose_layout(src_w, src_h, out_w, out_h, face_frames, mode)
     centers, face_ys = largest_face_centers(face_frames)
     known_y = [value for value in face_ys if value is not None]
@@ -409,17 +434,17 @@ def render_vertical_clip(
         else:
             subtitle_filter = None
 
+        audio_index = 1 if audio_url else 0
         video_filter = _video_filter(
             layout, src_w, src_h, out_w, out_h, fps, speed,
-            centers, face_frames, folder, subtitle_filter, has_audio,
+            centers, face_frames, folder, subtitle_filter, has_audio, audio_index,
         )
-        cmd = [
-            ffmpeg, "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}",
-            "-i", str(src), "-filter_complex", video_filter,
-            "-map", "[v]",
-        ]
+        cmd = [ffmpeg, "-y", *stream_input(src, headers, start, duration)]
+        if audio_url:
+            cmd += stream_input(audio_url, headers, start, duration)
+        cmd += ["-filter_complex", video_filter, "-map", "[v]"]
         if has_audio:
-            audio_map = "[a]" if abs(speed - 1.0) >= 0.01 else "0:a"
+            audio_map = "[a]" if abs(speed - 1.0) >= 0.01 else f"{audio_index}:a"
             cmd += ["-map", audio_map, "-c:a", "aac", "-b:a", "160k"]
         cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
@@ -443,7 +468,7 @@ def _atempo(speed):
     return ",".join(parts)
 
 
-def _video_filter(layout, src_w, src_h, out_w, out_h, fps, speed, centers, face_frames, folder, subtitle_filter, has_audio):
+def _video_filter(layout, src_w, src_h, out_w, out_h, fps, speed, centers, face_frames, folder, subtitle_filter, has_audio, audio_index=0):
     finish = []
     if abs(speed - 1.0) >= 0.01:
         finish.append(f"setpts=PTS/{speed:.4f}")
@@ -452,7 +477,7 @@ def _video_filter(layout, src_w, src_h, out_w, out_h, fps, speed, centers, face_
     tail = ("," + ",".join(finish)) if finish else ""
     audio = ""
     if has_audio and abs(speed - 1.0) >= 0.01:
-        audio = f";[0:a]{_atempo(speed)}[a]"
+        audio = f";[{audio_index}:a]{_atempo(speed)}[a]"
 
     if layout == "fit":
         body = (

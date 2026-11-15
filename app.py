@@ -44,11 +44,12 @@ def process_video():
         if framing not in ('auto', 'track', 'blur', 'split'):
             framing = 'auto'
         burn_captions = bool(data.get('captions', True))
+        live_seconds = _live_seconds_from_request(data)
         
         # Support both single URL and batch URLs
         if urls and isinstance(urls, list):
             # Batch processing
-            return process_batch(urls, formats, framing, burn_captions)
+            return process_batch(urls, formats, framing, burn_captions, live_seconds)
         elif url:
             # Single video processing
             if not (url.startswith('http://') or url.startswith('https://')):
@@ -72,7 +73,7 @@ def process_video():
             # Start processing in background thread
             thread = threading.Thread(
                 target=process_video_background,
-                args=(job_id, url, formats, framing, burn_captions)
+                args=(job_id, url, formats, framing, burn_captions, live_seconds)
             )
             thread.daemon = True
             thread.start()
@@ -88,7 +89,19 @@ def process_video():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-def process_batch(urls, formats, framing='track', burn_captions=True):
+def _live_seconds_from_request(data):
+    """Form sends minutes. Clamp to 1-10 minutes."""
+    from sources import clamp_live_seconds
+    raw = data.get('live_minutes', 3)
+    try:
+        minutes = float(raw)
+    except (TypeError, ValueError):
+        minutes = 3
+    minutes = min(10, max(1, minutes))
+    return clamp_live_seconds(minutes * 60, default=180)
+
+
+def process_batch(urls, formats, framing='track', burn_captions=True, live_seconds=None):
     """Process multiple videos in batch"""
     job_ids = []
     
@@ -114,7 +127,7 @@ def process_batch(urls, formats, framing='track', burn_captions=True):
         # Start processing
         thread = threading.Thread(
             target=process_video_background,
-            args=(job_id, url, formats, framing, burn_captions)
+            args=(job_id, url, formats, framing, burn_captions, live_seconds)
         )
         thread.daemon = True
         thread.start()
@@ -126,31 +139,51 @@ def process_batch(urls, formats, framing='track', burn_captions=True):
         'message': f'Started processing {len(job_ids)} videos'
     })
 
-def process_video_background(job_id, url, formats, framing='track', burn_captions=True):
+def process_video_background(job_id, url, formats, framing='track', burn_captions=True, live_seconds=None):
     """Process video in background thread"""
+    live_path = None
     try:
         jobs[job_id]['progress'] = 10
-        jobs[job_id]['message'] = 'Downloading video...'
+        jobs[job_id]['message'] = 'Opening the video link...'
         
-        # Download video
-        video_path = generator.download_video(url)
-        if not video_path:
+        media = generator.resolve_stream(url, live_seconds=live_seconds)
+        if not media:
             jobs[job_id]['status'] = 'error'
-            jobs[job_id]['error'] = 'Failed to download video'
+            jobs[job_id]['error'] = generator.last_error or 'Could not open that link'
             return
-        
-        jobs[job_id]['progress'] = 30
-        jobs[job_id]['message'] = 'Extracting transcript...'
-        
-        # Get transcript and keep a snapshot of timed captions for this job
-        transcript = generator.get_video_transcript(url)
-        caption_cues = list(generator.caption_cues)
+
+        if media.get('is_live'):
+            minutes = max(1, round((media.get('live_seconds') or 180) / 60))
+            jobs[job_id]['progress'] = 20
+            jobs[job_id]['message'] = f'Recording {minutes} minute(s) from the live stream...'
+            live_path = generator.capture_live_window(media)
+            if not live_path:
+                jobs[job_id]['status'] = 'error'
+                jobs[job_id]['error'] = generator.last_error or 'Could not record the live window'
+                return
+            source = live_path
+            clip_media = None
+            remote = False
+            duration = media['live_seconds']
+            transcript = None
+            caption_cues = []
+        else:
+            source = media['video_url']
+            clip_media = media
+            remote = True
+            duration = media['duration']
+            jobs[job_id]['progress'] = 30
+            jobs[job_id]['message'] = 'Extracting transcript...'
+            transcript = generator.get_video_transcript(url)
+            caption_cues = list(generator.caption_cues)
         
         jobs[job_id]['progress'] = 40
         jobs[job_id]['message'] = 'Ranking viral moments...'
         
         # Find clips
-        clips = generator.find_engaging_clips_ai(video_path, transcript)
+        clips = generator.find_engaging_clips_ai(
+            source, transcript, duration=duration, remote=remote
+        )
         
         if not clips:
             jobs[job_id]['status'] = 'error'
@@ -161,7 +194,7 @@ def process_video_background(job_id, url, formats, framing='track', burn_caption
         jobs[job_id]['message'] = f'Found {len(clips)} engaging clips. Creating videos...'
         
         # Create clips with parallel processing
-        video_name = Path(video_path).stem
+        video_name = generator.clip_stem(media)
         output_files = []
         total_clips = len(clips) * len(formats)
         current_clip = 0
@@ -179,7 +212,8 @@ def process_video_background(job_id, url, formats, framing='track', burn_caption
                 
                 clip_tasks.append({
                     'index': len(clip_tasks),
-                    'video_path': video_path,
+                    'video_path': source,
+                    'media': clip_media,
                     'start': start,
                     'end': end,
                     'output_path': str(output_path),
@@ -210,6 +244,7 @@ def process_video_background(job_id, url, formats, framing='track', burn_caption
                     hook=task['clip_info'].get('hook') or task['clip_title'],
                     caption_cues=caption_cues,
                     burn_captions=burn_captions,
+                    media=task.get('media'),
                 ):
                     thumbnail_path = generator.output_dir / f"{Path(task['output_path']).stem}.jpg"
                     
@@ -292,7 +327,7 @@ def process_video_background(job_id, url, formats, framing='track', burn_caption
         })
         
         # Save each clip to library
-        video_title = Path(video_path).stem
+        video_title = media.get('title') or video_name
         for file_info in output_files:
             clip_data = {
                 'job_id': job_id,
@@ -325,6 +360,12 @@ def process_video_background(job_id, url, formats, framing='track', burn_caption
             'formats': formats,
             'output_count': 0
         })
+    finally:
+        if live_path and os.path.exists(live_path):
+            try:
+                os.remove(live_path)
+            except OSError:
+                pass
 
 @app.route('/api/status/<job_id>')
 def get_status(job_id):
